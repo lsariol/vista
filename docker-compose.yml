@@ -1,0 +1,44 @@
+name: vista
+
+x-lighthouse:
+  deploy: releases                               # deployed on each version tag
+
+services:
+  vista:
+    build: .
+    container_name: vista
+    command: ["/vista", "serve"]
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    expose: ["3000"]                             # on the spark network only, never published
+    labels:
+      com.mobasity.public-url: https://vista.mobasity.com   # behind Cloudflare Access
+    environment:
+      - APP_ENV=prod
+      - VISTA_VERSION=${LIGHTHOUSE_DEPLOY_VERSION:-dev}
+      - VISTA_ADDR=:3000
+      - LOG_LEVEL=info
+      # Cloudflare Access: the team name and the application's audience tag
+      - VISTA_ACCESS_TEAM=${SHARED_CLOUDFLARE_TEAM_ID}
+      - VISTA_ACCESS_AUD=${VISTA_CLOUDFLARE_ACCESS_ID}
+      # Read-only sources on the spark network
+      - VISTA_SONAR_URL=http://sonar-api:2500
+      - VISTA_SONAR_TOKEN=${SHARED_SONAR_VISTA_TOKEN}
+      - VISTA_BLACKBOX_URL=http://blackbox-api:3190
+      - VISTA_BLACKBOX_TOKEN=${SHARED_BLACKBOX_VISTA_TOKEN}
+      - VISTA_COVE_URL=http://cove:2100
+    healthcheck:
+      test: ["CMD", "/vista", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks: [spark]
+
+networks:
+  spark:
+    external: true

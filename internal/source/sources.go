@@ -1,0 +1,186 @@
+package source
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/url"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/lsariol/vista/internal/config"
+)
+
+// Set is every source Vista reads, each behind its cache.
+type Set struct {
+	SonarStatus    *Cached[SonarStatus]
+	SonarHistory   map[string]*Cached[SonarHistory] // by range
+	BlackboxStatus *Cached[BlackboxStatus]
+	LogSources     *Cached[[]LogSource]
+	Errors         map[string]*Cached[ErrorWindow] // by range
+	Gaps           map[string]*Cached[[]LogGap]    // by range
+	Probes         *Cached[[]Probe]
+
+	blackbox *apiClient // nil when Blackbox isn't connected
+}
+
+// Probe is one infrastructure service's health endpoint and its answer.
+type Probe struct {
+	ID     string      `json:"id"`
+	Name   string      `json:"name"`
+	Result ProbeResult `json:"result"`
+}
+
+// Sonar's and Blackbox's Cove keys for Vista's tokens, named in error messages.
+const (
+	SonarTokenKey    = "SHARED_SONAR_VISTA_TOKEN"
+	BlackboxTokenKey = "SHARED_BLACKBOX_VISTA_TOKEN"
+)
+
+// NewSet builds the sources the configuration connects.
+func NewSet(cfg config.Config, log *slog.Logger) *Set {
+	s := &Set{
+		SonarHistory: map[string]*Cached[SonarHistory]{},
+		Errors:       map[string]*Cached[ErrorWindow]{},
+		Gaps:         map[string]*Cached[[]LogGap]{},
+	}
+
+	var sonar *apiClient
+	if cfg.SonarURL != "" && cfg.SonarToken != "" {
+		sonar = newAPIClient("Sonar", cfg.SonarURL, cfg.SonarToken, SonarTokenKey)
+	}
+	sonarMissing := "Set VISTA_SONAR_URL and VISTA_SONAR_TOKEN (Cove key " + SonarTokenKey + ")."
+	s.SonarStatus = NewCached("sonar", "Sonar", 10*time.Second, fetchOrNil(sonar, sonarStatus), sonarMissing, log)
+	for _, r := range Ranges {
+		var fetch func(context.Context) (SonarHistory, error)
+		if sonar != nil {
+			fetch = sonarHistory(sonar, r)
+		}
+		s.SonarHistory[r] = NewCached("sonar", "Sonar", 30*time.Second, fetch, sonarMissing, log)
+	}
+
+	if cfg.BlackboxURL != "" && cfg.BlackboxToken != "" {
+		s.blackbox = newAPIClient("Blackbox", cfg.BlackboxURL, cfg.BlackboxToken, BlackboxTokenKey)
+	}
+	bbMissing := "Set VISTA_BLACKBOX_URL and VISTA_BLACKBOX_TOKEN (Cove key " + BlackboxTokenKey + ")."
+	s.BlackboxStatus = NewCached("blackbox", "Blackbox", 15*time.Second, fetchOrNil(s.blackbox, blackboxStatus), bbMissing, log)
+	s.LogSources = NewCached("blackbox", "Blackbox", time.Minute, fetchOrNil(s.blackbox, blackboxSources), bbMissing, log)
+	for _, r := range Ranges {
+		d, _ := RangeDuration(r)
+		var errs func(context.Context) (ErrorWindow, error)
+		var gaps func(context.Context) ([]LogGap, error)
+		if s.blackbox != nil {
+			errs, gaps = blackboxErrors(s.blackbox, d), blackboxGaps(s.blackbox, d)
+		}
+		s.Errors[r] = NewCached("blackbox", "Blackbox", 30*time.Second, errs, bbMissing, log)
+		s.Gaps[r] = NewCached("blackbox", "Blackbox", time.Minute, gaps, bbMissing, log)
+	}
+
+	var probes []probe
+	if cfg.CoveURL != "" {
+		probes = append(probes, newProbe("Cove", cfg.CoveURL+"/v0/ready"))
+	}
+	if cfg.SonarURL != "" {
+		probes = append(probes, newProbe("Sonar API", cfg.SonarURL+"/healthz"))
+	}
+	if cfg.BlackboxURL != "" {
+		probes = append(probes, newProbe("Blackbox API", cfg.BlackboxURL+"/healthz"))
+	}
+	var probeAll func(context.Context) ([]Probe, error)
+	if len(probes) > 0 {
+		probeAll = func(ctx context.Context) ([]Probe, error) { return runProbes(ctx, probes), nil }
+	}
+	s.Probes = NewCached("probes", "Health checks", 10*time.Second, probeAll, "Set VISTA_COVE_URL, VISTA_SONAR_URL or VISTA_BLACKBOX_URL.", log)
+	return s
+}
+
+// fetchOrNil returns make(c), or nil when the client isn't connected.
+func fetchOrNil[T any](c *apiClient, make func(*apiClient) func(context.Context) (T, error)) func(context.Context) (T, error) {
+	if c == nil {
+		return nil
+	}
+	return make(c)
+}
+
+// probeIDs are stable identifiers for the probes, for the dashboard.
+var probeIDs = map[string]string{"Cove": "cove", "Sonar API": "sonar-api", "Blackbox API": "blackbox-api"}
+
+func runProbes(ctx context.Context, probes []probe) []Probe {
+	out := make([]Probe, len(probes))
+	var wg sync.WaitGroup
+	for i, p := range probes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := p.check(ctx)
+			if err != nil {
+				res = ProbeResult{Detail: err.Error()}
+			}
+			out[i] = Probe{ID: probeIDs[p.name], Name: p.name, Result: res}
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
+// ErrLogsNotConnected means Vista has no Blackbox token.
+var ErrLogsNotConnected = errors.New("Blackbox isn't connected: set VISTA_BLACKBOX_URL and VISTA_BLACKBOX_TOKEN (Cove key " + BlackboxTokenKey + ")")
+
+// LogQuery is a validated log search.
+type LogQuery struct {
+	From, To                   time.Time
+	Projects, Services, Fields []string
+	Version, Level, Stream, Q  string
+	Order, Cursor              string
+	Limit                      int
+}
+
+// SearchLogs runs a log search on Blackbox, uncached.
+func (s *Set) SearchLogs(ctx context.Context, q LogQuery) (LogPage, error) {
+	if s.blackbox == nil {
+		return LogPage{}, ErrLogsNotConnected
+	}
+	v := url.Values{}
+	if !q.From.IsZero() {
+		v.Set("from", q.From.UTC().Format(time.RFC3339))
+	}
+	if !q.To.IsZero() {
+		v.Set("to", q.To.UTC().Format(time.RFC3339))
+	}
+	for _, p := range q.Projects {
+		v.Add("project", p)
+	}
+	for _, sv := range q.Services {
+		v.Add("service", sv)
+	}
+	for _, f := range q.Fields {
+		v.Add("field", f)
+	}
+	for key, val := range map[string]string{"version": q.Version, "level": q.Level, "stream": q.Stream, "q": q.Q, "order": q.Order, "cursor": q.Cursor} {
+		if val != "" {
+			v.Set(key, val)
+		}
+	}
+	if q.Limit > 0 {
+		v.Set("limit", strconv.Itoa(q.Limit))
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var page LogPage
+	err := s.blackbox.getJSON(ctx, "/v1/logs", v, &page)
+	return page, err
+}
+
+// LogContext returns the lines around record id.
+func (s *Set) LogContext(ctx context.Context, id int64, before, after int) (LogContext, error) {
+	if s.blackbox == nil {
+		return LogContext{}, ErrLogsNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var c LogContext
+	err := s.blackbox.getJSON(ctx, "/v1/logs/"+strconv.FormatInt(id, 10)+"/context",
+		url.Values{"before": {strconv.Itoa(before)}, "after": {strconv.Itoa(after)}}, &c)
+	return c, err
+}
