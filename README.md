@@ -4,15 +4,16 @@ Vista is a private, read-only dashboard for Spark, the server Mobasity's project
 
 ## Features
 
-- See what needs attention first: projects that are down or degraded, failed deploys, error bursts, log gaps and sources that stopped answering.
-- Follow Spark's own health apart from the projects: its CPU and memory, and the health checks of the services every project relies on.
+- See what needs attention first: projects that are down or degraded, failed deploys, log gaps and sources that stopped answering.
+- Follow Spark apart from the projects: its CPU and memory, and the state of the services every project relies on.
 - Check every project's state, version, monitoring method, response time, 30- and 90-day uptime with coverage, and daily history.
-- Read deploys, error bursts and log gaps on one timeline, filtered by project.
+- Read deploys and log gaps on one timeline, filtered by project.
+- See the newest error lines across every project.
 - Search the logs every container wrote, open a line's fields, and read the lines around it.
 - Review availability and the days each project was down or degraded.
 - See where each piece of information comes from and how fresh it is. A source that can't be read is shown as unknown, never as zero or healthy.
 
-Vista collects nothing itself. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime, host measurements and deploys, and [Blackbox](https://github.com/lsariol/blackbox) for logs, through their read-only APIs. It has no controls: it can't deploy, restart, change settings or read secrets.
+Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime, host measurements and deploys, and [Blackbox](https://github.com/lsariol/blackbox) for logs, through their read-only APIs, and only while a page is open. It has no controls: it can't deploy, restart, change settings or read secrets.
 
 ## Requirements
 
@@ -21,7 +22,7 @@ Vista collects nothing itself. It reads [Sonar](https://github.com/lsariol/sonar
 
 ## Getting started
 
-Vista needs data to show. For a local run, `scripts/devsources` stands in for Sonar, Blackbox and the health endpoints with made-up data. Start it in one terminal:
+Vista needs data to show. For a local run, `scripts/devsources` stands in for Sonar and Blackbox with made-up data. Start it in one terminal:
 
 ```bash
 go run ./scripts/devsources
@@ -33,7 +34,6 @@ Then start Vista in another:
 APP_ENV=dev \
 VISTA_SONAR_URL=http://localhost:2599 VISTA_SONAR_TOKEN=dev \
 VISTA_BLACKBOX_URL=http://localhost:2599 VISTA_BLACKBOX_TOKEN=dev \
-VISTA_COVE_URL=http://localhost:2599 \
 go run ./cmd/vista serve
 ```
 
@@ -57,7 +57,6 @@ Everything is read from the environment.
 | `VISTA_SONAR_TOKEN` | | Vista's bearer token for Sonar |
 | `VISTA_BLACKBOX_URL` | | Blackbox's API, such as `http://blackbox-api:3190` |
 | `VISTA_BLACKBOX_TOKEN` | | Vista's bearer token for Blackbox |
-| `VISTA_COVE_URL` | | Cove's address, for its health check only |
 
 A source without its address and token is shown as not connected; Vista still starts.
 
@@ -79,14 +78,14 @@ The dashboard is plain HTML, CSS and JavaScript in `internal/web/static`, built 
 | `cmd/vista` | The binary: `serve`, `health`, `version`, `help` |
 | `internal/access` | The Cloudflare Access check |
 | `internal/config` | Settings, read once and checked |
-| `internal/source` | Sonar and Blackbox clients, health checks, and the cache that keeps a source's last answer |
-| `internal/dashboard` | What each page shows, built from the sources' answers |
+| `internal/source` | Sonar and Blackbox clients, and the cache that keeps a source's last answer |
+| `internal/dashboard` | The sources' answers arranged for each page |
 | `internal/web` | The HTTP server, Vista's JSON API and the pages |
 | `scripts/devsources` | Made-up sources for local runs |
 
 ## Deployment
 
-`docker-compose.yml` is written for [Lighthouse](https://github.com/lsariol/lighthouse), which deploys each version tag. It expects an external Docker network named `spark`, on which Sonar, Blackbox and Cove answer, and reads its tokens and Access settings from the environment. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+`docker-compose.yml` is written for [Lighthouse](https://github.com/lsariol/lighthouse), which deploys each version tag. It expects an external Docker network named `spark`, on which Sonar and Blackbox answer, and reads its tokens and Access settings from the environment. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

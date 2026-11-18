@@ -1,10 +1,10 @@
-// Command devsources stands in for Sonar, Blackbox and Cove on a development
+// Command devsources stands in for Sonar and Blackbox on a development
 // machine, with made-up data, so Vista can be run and looked at locally.
 //
 //	go run ./scripts/devsources            # listens on :2599
 //	APP_ENV=dev VISTA_SONAR_URL=http://localhost:2599 VISTA_SONAR_TOKEN=dev \
 //	  VISTA_BLACKBOX_URL=http://localhost:2599 VISTA_BLACKBOX_TOKEN=dev \
-//	  VISTA_COVE_URL=http://localhost:2599 go run ./cmd/vista serve
+//	  go run ./cmd/vista serve
 package main
 
 import (
@@ -30,11 +30,13 @@ var projects = []project{
 	{"cove", "operational", "v1.4.0", "container", 0, nil},
 	{"dibs", "down", "v0.3.0", "checked", 0, map[int]int{0: 14, 6: 32}},
 	{"lighthouse", "operational", "v2.3.1", "container", 0, nil},
+	{"lucassariol-web", "operational", "v1.0.2", "checked", 38, nil},
 	{"lys", "degraded", "v0.5.1", "checked", 182, map[int]int{3: 4}},
 	{"marquee", "operational", "v1.1.0", "checked", 64, nil},
 	{"mobasity-web", "updating", "v1.8.0", "checked", 41, nil},
 	{"plop", "operational", "v1.3.0", "checked", 51, map[int]int{20: 90}},
 	{"sonar", "operational", "v0.2.5", "container", 0, nil},
+	{"vista", "operational", "v0.0.0", "checked", 12, nil},
 }
 
 func main() {
@@ -43,12 +45,6 @@ func main() {
 		addr = os.Args[1]
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]string{"status": "ok", "version": "v0.0.0-dev"})
-	})
-	mux.HandleFunc("GET /v0/ready", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ready": true})
-	})
 	mux.HandleFunc("GET /v1/status", status)
 	mux.HandleFunc("GET /v1/status/history", history)
 	mux.HandleFunc("GET /v1/logs", logs)

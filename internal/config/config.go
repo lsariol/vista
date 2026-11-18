@@ -24,7 +24,6 @@ type Config struct {
 	SonarToken    string
 	BlackboxURL   string
 	BlackboxToken string
-	CoveURL       string
 }
 
 // AccessEnabled reports whether requests must carry a Cloudflare Access token.
@@ -50,7 +49,6 @@ func Load(getenv func(string) string) (Config, error) {
 		SonarToken:    get("VISTA_SONAR_TOKEN", ""),
 		BlackboxURL:   strings.TrimRight(get("VISTA_BLACKBOX_URL", ""), "/"),
 		BlackboxToken: get("VISTA_BLACKBOX_TOKEN", ""),
-		CoveURL:       strings.TrimRight(get("VISTA_COVE_URL", ""), "/"),
 	}
 
 	var problems []error
@@ -70,7 +68,6 @@ func Load(getenv func(string) string) (Config, error) {
 	for _, u := range []struct{ key, value string }{
 		{"VISTA_SONAR_URL", c.SonarURL},
 		{"VISTA_BLACKBOX_URL", c.BlackboxURL},
-		{"VISTA_COVE_URL", c.CoveURL},
 	} {
 		if u.value == "" {
 			continue

@@ -30,7 +30,6 @@ services:
       - VISTA_SONAR_TOKEN=${SHARED_SONAR_VISTA_TOKEN}
       - VISTA_BLACKBOX_URL=http://blackbox-api:3190
       - VISTA_BLACKBOX_TOKEN=${SHARED_BLACKBOX_VISTA_TOKEN}
-      - VISTA_COVE_URL=http://cove:2100
     healthcheck:
       test: ["CMD", "/vista", "health"]
       interval: 10s

@@ -134,10 +134,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			note(st)
 		},
 		func() {
-			v, have, st := s.src.Errors["24h"].Get(ctx)
-			if have && st.State == source.OK {
-				in.Errors24h = &v
-			}
+			v, have, st := s.src.RecentErrors.Get(ctx)
+			in.RecentErrors, in.ErrorsKnown = v, have
 			note(st)
 		},
 		func() {
@@ -151,10 +149,6 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 				in.Blackbox = &v
 			}
 			note(st)
-		},
-		func() {
-			v, have, st := s.src.Probes.Get(ctx)
-			in.Probes, in.ProbesKnown = v, have && st.State == source.OK
 		},
 	)
 	in.SourceStates = orderSources(append(states, lighthouseStatus, appsStatus))
@@ -191,7 +185,7 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	in := dashboard.ActivityInputs{Now: s.now(), Range: rng}
-	var states [3]source.Status
+	var states [2]source.Status
 	parallel(
 		func() {
 			v, have, st := s.src.SonarHistory[rng].Get(ctx)
@@ -201,16 +195,9 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 			states[0] = st
 		},
 		func() {
-			v, have, st := s.src.Errors[rng].Get(ctx)
-			if have {
-				in.Errors = &v
-			}
-			states[1] = st
-		},
-		func() {
 			v, _, st := s.src.Gaps[rng].Get(ctx)
 			in.Gaps = v
-			states[2] = st
+			states[1] = st
 		},
 	)
 	in.SourceStates = append(states[:], lighthouseStatus)

@@ -13,13 +13,12 @@ import (
 type Event struct {
 	At      time.Time  `json:"at"`
 	End     *time.Time `json:"end,omitempty"`
-	Kind    string     `json:"kind"` // deploy, deploy_failed, errors, log_gap
+	Kind    string     `json:"kind"` // deploy, deploy_failed, log_gap
 	Project string     `json:"project,omitempty"`
 	Title   string     `json:"title"`
 	Detail  string     `json:"detail,omitempty"`
 	Source  string     `json:"source"`
 	Version *string    `json:"version,omitempty"`
-	LogID   int64      `json:"log_id,omitempty"` // the newest error line, for its context
 	Link    string     `json:"link,omitempty"`
 }
 
@@ -38,7 +37,6 @@ type ActivityInputs struct {
 	Now          time.Time
 	Range        string
 	History      *source.SonarHistory
-	Errors       *source.ErrorWindow
 	Gaps         []source.LogGap
 	SourceStates []source.Status
 }
@@ -49,6 +47,7 @@ func BuildActivity(in ActivityInputs) Activity {
 		Notes: []string{
 			"Deploys are the container swaps Sonar saw. Lighthouse's own deploy records aren't connected yet.",
 			"Health changes and container restarts aren't listed: Sonar doesn't serve them yet.",
+			"Errors per project and hour aren't listed: Blackbox doesn't serve error counts yet. The Logs page shows every error line.",
 			"Events close together are leads to investigate, not proof that one caused the other.",
 		}}
 
@@ -73,13 +72,6 @@ func BuildActivity(in ActivityInputs) Activity {
 		}
 	}
 
-	if in.Errors != nil {
-		a.Events = append(a.Events, groupErrors(in.Errors, in.Range)...)
-		if in.Errors.Truncated {
-			a.Notes = append(a.Notes, fmt.Sprintf("Only the newest %d error lines in this range are counted.", in.Errors.Limit))
-		}
-	}
-
 	for _, g := range in.Gaps {
 		e := Event{At: g.From, Kind: "log_gap", Title: "Possible log gap: " + gapKind(g.Kind), Detail: g.Detail, Source: "Blackbox"}
 		if g.Container != nil {
@@ -91,14 +83,7 @@ func BuildActivity(in ActivityInputs) Activity {
 		a.Events = append(a.Events, e)
 	}
 
-	// Newest first, by each event's latest moment: an error burst sorts by its last line.
-	latest := func(e Event) time.Time {
-		if e.Kind == "errors" && e.End != nil {
-			return *e.End
-		}
-		return e.At
-	}
-	sort.SliceStable(a.Events, func(i, j int) bool { return latest(a.Events[i]).After(latest(a.Events[j])) })
+	sort.SliceStable(a.Events, func(i, j int) bool { return a.Events[i].At.After(a.Events[j].At) })
 	seen := map[string]bool{}
 	a.Projects = []string{}
 	for _, e := range a.Events {
@@ -111,45 +96,6 @@ func BuildActivity(in ActivityInputs) Activity {
 	return a
 }
 
-// groupErrors folds error lines into one event per project per hour (per day
-// for ranges over a day), so a noisy project doesn't bury everything else.
-func groupErrors(w *source.ErrorWindow, rangeName string) []Event {
-	bucket := time.Hour
-	if d, ok := source.RangeDuration(rangeName); ok && d > 24*time.Hour {
-		bucket = 24 * time.Hour
-	}
-	type key struct {
-		project string
-		start   time.Time
-	}
-	groups := map[key][]source.LogRecord{}
-	var order []key
-	for _, r := range w.Records { // newest first
-		k := key{recordProject(r), r.Time.UTC().Truncate(bucket)}
-		if _, ok := groups[k]; !ok {
-			order = append(order, k)
-		}
-		groups[k] = append(groups[k], r)
-	}
-	out := make([]Event, 0, len(order))
-	for _, k := range order {
-		recs := groups[k]
-		newest, oldest := recs[0], recs[len(recs)-1]
-		end := newest.Time
-		e := Event{
-			At: oldest.Time, End: &end, Kind: "errors", Project: k.project, Source: "Blackbox",
-			Title:   k.project + " logged " + plural(len(recs), "error line", "error lines"),
-			Detail:  "Newest: " + clip(newest.Message, 200),
-			Version: newest.Version,
-			LogID:   newest.ID,
-			Link: "#/logs?project=" + k.project + "&level=error&from=" + k.start.Format(time.RFC3339) +
-				"&to=" + k.start.Add(bucket).Format(time.RFC3339),
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 func gapKind(k string) string {
 	switch k {
 	case "container_removed":
@@ -160,16 +106,6 @@ func gapKind(k string) string {
 		return "Docker's log file was damaged"
 	}
 	return strings.ReplaceAll(k, "_", " ")
-}
-
-// clip shortens s to n runes on one line.
-func clip(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }
 
 // IncidentDay is one day a project was down or degraded.
