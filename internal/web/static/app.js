@@ -133,7 +133,7 @@
     { id: 'overview', label: 'Overview', ico: '⌂', render: renderOverview, auto: true, sub: 'What needs attention on Spark and its projects' },
     { id: 'projects', label: 'Projects', ico: '◇', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version and availability' },
     { id: 'spark', label: 'Spark', ico: 'ϟ', render: renderSpark, auto: true, sub: 'The server itself: its resources and the infrastructure every project relies on' },
-    { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys, error bursts and log gaps on one timeline' },
+    { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys and log gaps on one timeline' },
     { id: 'logs', label: 'Logs', ico: '▤', render: renderLogs, auto: false, sub: 'Search what every container wrote, kept by Blackbox' },
     { id: 'incidents', label: 'Incidents', ico: '⚠', render: renderIncidents, auto: true, sub: 'Availability and the days projects were down or degraded' },
     { id: 'sources', label: 'Sources', ico: '◉', render: renderSources, auto: true, sub: 'Where Vista\'s information comes from, and how fresh it is' },
@@ -444,10 +444,10 @@
           h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '〽'), 'Host CPU and memory'),
             h('span', { class: 'muted' }, rangeLabel(o.host.range))),
           hostChart(o.host)),
-        deploysPanel(o.host.deploys, o.host.range)),
+        deploysPanel(o.host)),
       projectsTable(o.projects, { title: 'Projects', compact: true }),
       recentErrorsPanel(errs),
-      h('p', { class: 'note' }, 'States, versions, uptime and host measurements come from Sonar; errors and log storage from Blackbox. ',
+      h('p', { class: 'note' }, 'States, versions, uptime and host measurements come from Sonar; errors and log storage from Blackbox; deploys from Lighthouse. ',
         'Anything a source can\'t say is shown as unknown or “—”, never as zero or healthy.'),
     ];
   }
@@ -494,8 +494,8 @@
       body);
   }
 
-  function deploysPanel(deploys, range) {
-    const list = deploys.slice().reverse().slice(0, 8);
+  function deploysPanel(host) {
+    const list = host.deploys.slice().reverse().slice(0, 8);
     return h('article', { class: 'card panel' },
       h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⇪'), 'Deploys'),
         h('a', { href: hashFor('activity', {}) }, 'Activity')),
@@ -503,11 +503,22 @@
         h('div', { class: 'list-main' },
           h('a', { href: `#/projects/${encodeURIComponent(d.project)}` }, d.project), ' ',
           h('span', { class: 'mono' }, d.to || 'unknown version'),
-          h('small', null, d.from ? `from ${d.from} · ` : '', `took ${fmtSeconds(d.seconds)}`)),
-        h('div', { class: 'attn-meta' }, badge(d.outcome === 'ok' ? 'healthy' : 'down', d.outcome === 'ok' ? 'OK' : d.outcome),
+          h('small', null, d.from ? `from ${d.from} · ` : '', d.step ? `failed at ${d.step} · ` : '', `took ${fmtSeconds(d.seconds)}`)),
+        h('div', { class: 'attn-meta' }, outcomeBadge(d.outcome),
           h('div', { title: fmtFull(d.started) }, fmtTime(d.started)))))
-        : h('div', { class: 'empty' }, `No deploys in the ${rangeLabel(range).toLowerCase()}.`));
+        : h('div', { class: 'empty' }, `No deploys in the ${rangeLabel(host.range).toLowerCase()}.`),
+      h('p', { class: 'note' }, host.deploy_source === 'Lighthouse'
+        ? 'Lighthouse\'s deploy records.'
+        : 'Container swaps Sonar saw: Lighthouse can\'t be read, so deploys that failed before a swap aren\'t here. ',
+      host.deploy_source === 'Lighthouse' ? null : h('a', { href: hashFor('logs', { project: 'lighthouse', q: 'deploy', range: '7d' }) }, 'Lighthouse\'s deploy log')));
   }
+
+  const outcomeBadge = (o) => badge(o === 'ok' ? 'healthy' : 'down', o === 'ok' ? 'OK' : o);
+
+  // Lighthouse's own word for a project, shown as a state.
+  const LH_STATE = { ok: ['healthy', 'Deploying normally'], failing: ['degraded', 'Deploys failing'], broken: ['down', 'Broken'],
+    stopped: ['unknown', 'Stopped'], not_deployed: ['unknown', 'Not deployed yet'] };
+  const lhBadge = (st) => badge(...(LH_STATE[st] || ['unknown', st]));
 
   function projectsTable(projects, { title, compact, grouped, filter } = {}) {
     let rows = projects;
@@ -587,6 +598,7 @@
       return;
     }
     const errorsHost = h('div', null, h('div', { class: 'loading' }, 'Loading errors…'));
+    const releasesHost = h('div', { class: 'section' });
     const days = p.days.filter((d) => d.state !== 'no_data');
     const downDays = p.days.filter((d) => d.down_minutes > 0).length;
     content.replaceChildren(
@@ -601,11 +613,19 @@
             : p.monitoring === 'outside check' ? 'No successful check in the last hour' : 'No outside check'),
           kv('Days with downtime', `${downDays} of the ${days.length} observed`)),
         h('div', { class: 'section' }, dayStrip(p.days, true), h('div', { class: 'note' }, `The last ${p.days.length} UTC days. Hover a day for its minutes.`))),
-      section('Last deploy, 24 hours', h('div', { class: 'card' }, p.last_deploy
-        ? [kv('Outcome', badge(p.last_deploy.outcome === 'ok' ? 'healthy' : 'down', p.last_deploy.outcome)),
-          kv('Version', `${p.last_deploy.from || 'none'} → ${p.last_deploy.to || 'unknown'}`),
-          kv('When', `${fmtFull(p.last_deploy.started)} (took ${fmtSeconds(p.last_deploy.seconds)})`)]
-        : h('div', { class: 'muted' }, 'No deploy in the last 24 hours.'))),
+      section('Deploys', h('div', { class: 'card' },
+        p.lighthouse
+          ? [kv('Lighthouse', lhBadge(p.lighthouse.state)),
+            kv('Deployed', p.lighthouse.version ? `${p.lighthouse.version}${p.lighthouse.deployed_at ? `, ${fmtFull(p.lighthouse.deployed_at)}` : ''}` : '—'),
+            kv('Follows', p.lighthouse.mode === 'releases' ? 'Version tags' : 'Its branch'),
+            p.lighthouse.last_error ? kv('Last problem', `${p.lighthouse.last_error}${p.lighthouse.last_error_at ? ` (${ago(p.lighthouse.last_error_at)})` : ''}`) : null]
+          : kv('Lighthouse', h('span', { class: 'muted' }, 'Not reported')),
+        p.last_deploy
+          ? [kv('Last deploy, 24 hours', outcomeBadge(p.last_deploy.outcome)),
+            kv('Version', `${p.last_deploy.from ? `${p.last_deploy.from} → ` : ''}${p.last_deploy.to || 'unknown'}${p.last_deploy.step ? `, failed at ${p.last_deploy.step}` : ''}`),
+            kv('When', `${fmtFull(p.last_deploy.started)} (took ${fmtSeconds(p.last_deploy.seconds)}, from ${p.last_deploy.source})`)]
+          : kv('Last deploy, 24 hours', 'None')),
+        releasesHost),
       section('Errors, 24 hours', errorsHost),
       section('Resources', h('div', { class: 'card muted' }, 'Not available yet: Sonar doesn\'t serve per-project CPU, memory or network to Vista.')),
       section('Usage', h('div', { class: 'card muted' }, `Not instrumented: ${name} doesn't serve usage counts.`)),
@@ -614,6 +634,7 @@
         h('a', { href: hashFor('activity', { project: name }) }, 'Its activity')),
       h('p', { class: 'note' }, 'Read-only. Events close together are leads to investigate, not proof of cause.'),
     );
+    loadReleases(name, releasesHost);
     try {
       const page = await api(`/api/v1/logs?${new URLSearchParams({ project: name, level: 'error', range: '24h', limit: '8' })}`);
       errorsHost.replaceChildren(page.records.length
@@ -622,6 +643,18 @@
         : h('div', { class: 'card muted' }, 'No error lines in the last 24 hours.'));
     } catch (err) {
       errorsHost.replaceChildren(h('div', { class: 'card muted' }, err.message));
+    }
+  }
+
+  async function loadReleases(name, host) {
+    try {
+      const { releases } = await api(`/api/v1/projects/${encodeURIComponent(name)}/releases`);
+      if (!releases.length) return;
+      host.replaceChildren(h('h3', null, 'Releases'), h('div', { class: 'card' }, releases.slice(0, 8).map((r) => h('div', { class: 'list-row' },
+        h('div', { class: 'list-main' }, h('span', { class: 'mono' }, r.tag), r.note ? h('small', null, r.note) : null),
+        h('div', { class: 'attn-meta' }, r.status, h('div', { title: fmtFull(r.published_at || r.created_at) }, ago(r.published_at || r.created_at)))))));
+    } catch {
+      // Lighthouse not connected or not answering: the Sources page says which.
     }
   }
 
@@ -709,7 +742,8 @@
           h('option', { value: '' }, 'All projects'), projects.map((p) => h('option', { value: p, selected: p === project }, p))),
         h('select', { class: 'select', 'aria-label': 'Kind', onchange: (e) => nav({ kind: e.target.value }) },
           h('option', { value: '' }, 'Every kind'), Object.entries(kinds).map(([k, l]) => h('option', { value: k, selected: k === kind }, l))),
-        h('span', { class: 'pill' }, rangeLabel(range))),
+        h('span', { class: 'pill' }, rangeLabel(range)),
+        h('a', { href: hashFor('logs', { project: 'lighthouse', q: 'deploy', range }) }, 'Lighthouse\'s deploy log')),
       sourceWarnings(a.sources),
       h('article', { class: 'card panel' },
         h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⌁'), 'Timeline'),
@@ -721,11 +755,35 @@
             h('div', { class: 'event-title' }, e.title),
             e.detail ? h('div', { class: 'event-detail' }, e.detail) : null,
             h('div', { class: 'log-actions' },
-              e.link ? h('a', { href: e.link }, 'Logs around it') : null)),
+              e.link ? h('a', { href: e.link }, 'Logs around it') : null,
+              e.deploy_id ? stepsToggle(e.deploy_id) : null)),
           h('div', { class: 'event-src' }, e.source)))
           : h('div', { class: 'empty' }, 'Nothing happened in this range, as far as the connected sources know.')),
       h('ul', { class: 'notes' }, a.notes.map((n) => h('li', null, n))),
     ];
+  }
+
+  // stepsToggle shows a Lighthouse deploy's steps, loaded when first opened.
+  function stepsToggle(id) {
+    const box = h('div', { class: 'steps', hidden: true });
+    const btn = h('button', { class: 'link-btn', type: 'button', 'aria-expanded': 'false', onclick: async () => {
+      box.hidden = !box.hidden;
+      btn.setAttribute('aria-expanded', String(!box.hidden));
+      if (box.hidden || box.childNodes.length) return;
+      box.append(h('div', { class: 'loading' }, 'Loading steps…'));
+      try {
+        const d = await api(`/api/v1/deployments/${id}`);
+        box.replaceChildren(...d.steps.map((st) => h('div', { class: 'step' },
+          h('div', { class: 'list-row' }, h('span', { class: 'mono' }, st.step),
+            h('span', null, badge(st.status === 'succeeded' ? 'healthy' : st.status === 'failed' ? 'down' : 'unknown', st.status), ' ',
+              h('span', { class: 'muted' }, fmtSeconds((toDate(st.finished_at) - toDate(st.started_at)) / 1000)))),
+          st.status === 'failed' && st.log ? h('pre', { class: 'step-log' }, st.log) : null)));
+        if (!d.steps.length) box.replaceChildren(h('div', { class: 'muted' }, 'Lighthouse recorded no steps for this deploy.'));
+      } catch (err) {
+        box.replaceChildren(h('div', { class: 'muted' }, err.message));
+      }
+    } }, 'Steps');
+    return [btn, box];
   }
 
   function sourceWarnings(sources) {
@@ -904,12 +962,11 @@
 
   // ---------- Sources ----------
   const SOURCE_INFO = {
-    sonar: { gives: 'Project states, versions, uptime and daily history; host CPU and memory; deploys.',
-      missing: 'Spark\'s own conditions, the projects the public status leaves out, per-project resources, disk, network, load, restarts, and when each state change began.' },
+    sonar: { gives: 'Every project\'s state, version, uptime and daily history; host CPU and memory; container swaps.',
+      missing: 'Spark\'s own conditions, per-project resources, disk, network, load, restarts, and when each state change began.' },
     blackbox: { gives: 'Log search, the lines around a line, the newest errors, log sources, gaps and collection health.',
       missing: 'Error counts per project and hour.' },
-    lighthouse: { gives: 'Deploy records, rollbacks and the version each project runs.',
-      missing: 'A read-only API on the spark network. Until then, deploys come from Sonar.' },
+    lighthouse: { gives: 'Deploy records with their steps, rollbacks, releases, and each project\'s deploy state.' },
     apps: { gives: 'Usage counts each application defines, such as games played or commands run.',
       missing: 'No application serves them yet.' },
   };

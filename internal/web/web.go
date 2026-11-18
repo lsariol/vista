@@ -45,6 +45,8 @@ func New(src *source.Set, log *slog.Logger, version string) http.Handler {
 	mux.HandleFunc("GET /api/v1/logs", s.logs)
 	mux.HandleFunc("GET /api/v1/logs/{id}/context", s.logContext)
 	mux.HandleFunc("GET /api/v1/log-sources", s.logSources)
+	mux.HandleFunc("GET /api/v1/deployments/{id}", s.deployment)
+	mux.HandleFunc("GET /api/v1/projects/{name}/releases", s.releases)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No such API path.")
 	})
@@ -150,18 +152,29 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			}
 			note(st)
 		},
+		func() {
+			v, have, st := s.src.LighthouseProjects.Get(ctx)
+			in.Lighthouse, in.LHKnown = v, have
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Deployments[rng].Get(ctx)
+			in.Deploys, in.DeploysKnown = v, have
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Deployments["24h"].Get(ctx)
+			in.DayDeploys, in.DayKnown = v, have
+			note(st)
+		},
 	)
-	in.SourceStates = orderSources(append(states, lighthouseStatus, appsStatus))
+	in.SourceStates = orderSources(append(states, appsStatus))
 	writeJSON(w, http.StatusOK, dashboard.BuildOverview(in))
 }
 
-// Sources Vista will read once they serve what it needs.
-var (
-	lighthouseStatus = source.Status{ID: "lighthouse", Name: "Lighthouse", State: source.NotConnected,
-		Detail: "Lighthouse has no read-only API on the spark network yet. Deploys are shown from Sonar instead."}
-	appsStatus = source.Status{ID: "apps", Name: "Applications", State: source.NotConnected,
-		Detail: "No application serves usage counts yet."}
-)
+// appsStatus is the source Vista will read once applications serve usage counts.
+var appsStatus = source.Status{ID: "apps", Name: "Applications", State: source.NotConnected,
+	Detail: "No application serves usage counts yet."}
 
 // sourceOrder is the order sources are listed in.
 var sourceOrder = map[string]int{"sonar": 0, "blackbox": 1, "lighthouse": 2, "apps": 3}
@@ -185,7 +198,7 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	in := dashboard.ActivityInputs{Now: s.now(), Range: rng}
-	var states [2]source.Status
+	var states [3]source.Status
 	parallel(
 		func() {
 			v, have, st := s.src.SonarHistory[rng].Get(ctx)
@@ -199,8 +212,13 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 			in.Gaps = v
 			states[1] = st
 		},
+		func() {
+			v, have, st := s.src.Deployments[rng].Get(ctx)
+			in.Deploys, in.DeploysKnown = v, have
+			states[2] = st
+		},
 	)
-	in.SourceStates = append(states[:], lighthouseStatus)
+	in.SourceStates = states[:]
 	writeJSON(w, http.StatusOK, dashboard.BuildActivity(in))
 }
 
@@ -366,13 +384,58 @@ func (s *Server) logContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "The deploy's id must be a positive number.")
+		return
+	}
+	d, err := s.src.Deployment(r.Context(), id)
+	if err != nil {
+		s.sourceError(w, "deployment", err)
+		return
+	}
+	if d.Steps == nil {
+		d.Steps = []source.LighthouseStep{}
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) releases(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !namePattern.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "The project must be a plain name.")
+		return
+	}
+	rel, err := s.src.Releases(r.Context(), name)
+	if err != nil {
+		s.sourceError(w, "releases", err)
+		return
+	}
+	if rel == nil {
+		rel = []source.LighthouseRelease{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"releases": rel})
+}
+
+// notFound says what a 404 from each call means.
+var notFound = map[string]string{
+	"log context": "Blackbox no longer has that log line: it may be past retention.",
+	"deployment":  "Lighthouse has no deploy with that id: its project may have been removed.",
+	"releases":    "Lighthouse doesn't know that project.",
+}
+
 // sourceError answers a failed call to a source.
 func (s *Server) sourceError(w http.ResponseWriter, what string, err error) {
 	switch {
-	case errors.Is(err, source.ErrLogsNotConnected):
+	case errors.Is(err, source.ErrLogsNotConnected), errors.Is(err, source.ErrLighthouseNotConnected):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, source.ErrNotFound):
-		writeError(w, http.StatusNotFound, "Blackbox no longer has that log line: it may be past retention.")
+		msg := notFound[what]
+		if msg == "" {
+			msg = "Not found."
+		}
+		writeError(w, http.StatusNotFound, msg)
 	default:
 		s.log.Warn("source call failed", "component", "http", "call", what, "err", err)
 		writeError(w, http.StatusBadGateway, err.Error())

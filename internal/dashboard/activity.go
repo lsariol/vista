@@ -11,15 +11,16 @@ import (
 
 // Event is one entry on the Activity timeline.
 type Event struct {
-	At      time.Time  `json:"at"`
-	End     *time.Time `json:"end,omitempty"`
-	Kind    string     `json:"kind"` // deploy, deploy_failed, log_gap
-	Project string     `json:"project,omitempty"`
-	Title   string     `json:"title"`
-	Detail  string     `json:"detail,omitempty"`
-	Source  string     `json:"source"`
-	Version *string    `json:"version,omitempty"`
-	Link    string     `json:"link,omitempty"`
+	At       time.Time  `json:"at"`
+	End      *time.Time `json:"end,omitempty"`
+	Kind     string     `json:"kind"` // deploy, deploy_failed, log_gap
+	Project  string     `json:"project,omitempty"`
+	Title    string     `json:"title"`
+	Detail   string     `json:"detail,omitempty"`
+	Source   string     `json:"source"`
+	Version  *string    `json:"version,omitempty"`
+	DeployID int64      `json:"deploy_id,omitempty"` // Lighthouse's id, for its steps
+	Link     string     `json:"link,omitempty"`
 }
 
 // Activity is the timeline page.
@@ -37,6 +38,8 @@ type ActivityInputs struct {
 	Now          time.Time
 	Range        string
 	History      *source.SonarHistory
+	Deploys      []source.LighthouseDeployment
+	DeploysKnown bool
 	Gaps         []source.LogGap
 	SourceStates []source.Status
 }
@@ -45,31 +48,33 @@ type ActivityInputs struct {
 func BuildActivity(in ActivityInputs) Activity {
 	a := Activity{GeneratedAt: in.Now.UTC(), Range: in.Range, Events: []Event{}, Sources: mergeSources(in.SourceStates),
 		Notes: []string{
-			"Deploys are the container swaps Sonar saw. Lighthouse's own deploy records aren't connected yet.",
 			"Health changes and container restarts aren't listed: Sonar doesn't serve them yet.",
 			"Errors per project and hour aren't listed: Blackbox doesn't serve error counts yet. The Logs page shows every error line.",
 			"Events close together are leads to investigate, not proof that one caused the other.",
 		}}
 
-	if in.History != nil {
-		for _, u := range in.History.Updates {
-			e := Event{At: u.Started, Project: u.Project, Source: "Sonar", Version: u.To,
-				Link: "#/logs?project=" + u.Project + "&from=" + u.Started.Add(-5*time.Minute).Format(time.RFC3339) + "&to=" + u.Ended.Add(10*time.Minute).Format(time.RFC3339)}
-			end := u.Ended
-			e.End = &end
-			if u.Outcome == "ok" {
-				e.Kind = "deploy"
-				e.Title = u.Project + " deployed"
-				if u.To != nil {
-					e.Title += " " + *u.To
-				}
-			} else {
-				e.Kind = "deploy_failed"
-				e.Title = u.Project + " deploy " + u.Outcome
+	if in.DeploysKnown {
+		a.Notes = append([]string{"Deploys are Lighthouse's records."}, a.Notes...)
+	} else {
+		a.Notes = append([]string{"Deploys are the container swaps Sonar saw: Lighthouse can't be read. Its deploy lines are in the Logs page."}, a.Notes...)
+	}
+	for _, d := range pickDeploys(in.Deploys, in.DeploysKnown, in.History) {
+		e := Event{At: d.Started, Project: d.Project, Source: d.Source, Version: d.To, DeployID: d.ID,
+			Link: "#/logs?project=" + d.Project + "&from=" + d.Started.Add(-5*time.Minute).Format(time.RFC3339) + "&to=" + d.Ended.Add(10*time.Minute).Format(time.RFC3339)}
+		end := d.Ended
+		e.End = &end
+		if d.Outcome == "ok" {
+			e.Kind = "deploy"
+			e.Title = d.Project + " deployed"
+			if d.To != nil {
+				e.Title += " " + *d.To
 			}
-			e.Detail = versionChange(u.From, u.To) + fmt.Sprintf(" Took %d s.", u.Seconds)
-			a.Events = append(a.Events, e)
+		} else {
+			e.Kind = "deploy_failed"
+			e.Title = d.Project + " deploy " + d.Outcome
 		}
+		e.Detail = strings.TrimSpace(deployDetail(d) + fmt.Sprintf(" Took %d s.", d.Seconds))
+		a.Events = append(a.Events, e)
 	}
 
 	for _, g := range in.Gaps {

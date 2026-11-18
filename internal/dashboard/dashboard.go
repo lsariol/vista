@@ -7,6 +7,7 @@ package dashboard
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/lsariol/vista/internal/source"
@@ -64,21 +65,104 @@ type Project struct {
 	Uptime90d      source.Uptime     `json:"uptime_90d"`
 	Days           []source.SonarDay `json:"days"`
 	LastDeploy     *Deploy           `json:"last_deploy"`
+	Lighthouse     *DeployState      `json:"lighthouse"` // nil when Lighthouse can't be read or doesn't know it
 }
 
-// Deploy is one deploy as Sonar saw it.
+// DeployState is how Lighthouse reports a project's deploys.
+type DeployState struct {
+	State       string     `json:"state"` // ok, failing, broken, stopped, not_deployed
+	Mode        string     `json:"mode"`  // branch or releases
+	Version     *string    `json:"version"`
+	DeployedAt  *time.Time `json:"deployed_at"`
+	LastError   *string    `json:"last_error"`
+	LastErrorAt *time.Time `json:"last_error_at"`
+}
+
+// Deploy is one deploy: Lighthouse's record when Lighthouse answers, or the
+// container swap Sonar saw when it doesn't.
 type Deploy struct {
+	Source  string    `json:"source"`       // Lighthouse or Sonar
+	ID      int64     `json:"id,omitempty"` // Lighthouse's id, for its steps
 	Project string    `json:"project"`
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended"`
 	Seconds int       `json:"seconds"`
-	From    *string   `json:"from"`
+	From    *string   `json:"from"` // Sonar only: the version it replaced
 	To      *string   `json:"to"`
-	Outcome string    `json:"outcome"`
+	Outcome string    `json:"outcome"` // ok, failed, timed out, rolled back
+	Step    *string   `json:"step,omitempty"`
+	Error   *string   `json:"error,omitempty"`
+	Trigger string    `json:"trigger,omitempty"`
 }
 
 func deployFrom(u source.SonarUpdate) Deploy {
-	return Deploy{Project: u.Project, Started: u.Started, Ended: u.Ended, Seconds: u.Seconds, From: u.From, To: u.To, Outcome: u.Outcome}
+	return Deploy{Source: "Sonar", Project: u.Project, Started: u.Started, Ended: u.Ended, Seconds: u.Seconds, From: u.From, To: u.To, Outcome: u.Outcome}
+}
+
+// lighthouseOutcome names Lighthouse's statuses the way Vista shows outcomes.
+var lighthouseOutcome = map[string]string{"succeeded": "ok", "failed": "failed", "rolled_back": "rolled back"}
+
+func deployFromLighthouse(d source.LighthouseDeployment) Deploy {
+	out := Deploy{Source: "Lighthouse", ID: d.ID, Project: d.Project, Started: d.StartedAt, Ended: d.FinishedAt,
+		Seconds: int(d.FinishedAt.Sub(d.StartedAt).Seconds()), To: d.Version, Outcome: lighthouseOutcome[d.Status],
+		Step: d.FailedStep, Error: d.Error, Trigger: d.Trigger}
+	if out.Outcome == "" {
+		out.Outcome = d.Status
+	}
+	if out.To == nil && d.SHA != nil && len(*d.SHA) >= 7 {
+		sha := (*d.SHA)[:7]
+		out.To = &sha
+	}
+	return out
+}
+
+// pickDeploys is Lighthouse's records when Lighthouse answered, otherwise
+// the swaps Sonar saw; oldest first either way.
+func pickDeploys(lh []source.LighthouseDeployment, lhKnown bool, sonar *source.SonarHistory) []Deploy {
+	out := []Deploy{}
+	switch {
+	case lhKnown:
+		for _, d := range lh {
+			out = append(out, deployFromLighthouse(d))
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
+	case sonar != nil:
+		for _, u := range sonar.Updates {
+			out = append(out, deployFrom(u))
+		}
+	}
+	return out
+}
+
+// deployDetail describes a deploy in one line.
+func deployDetail(d Deploy) string {
+	var s string
+	if d.Source == "Sonar" {
+		s = versionChange(d.From, d.To)
+	} else if d.To != nil {
+		s = "Version " + *d.To + "."
+	}
+	errText := ""
+	if d.Error != nil {
+		errText = clip(*d.Error, 200)
+	}
+	if d.Step != nil && *d.Step != "" && !strings.HasPrefix(errText, *d.Step+":") {
+		s += " Failed at " + *d.Step + "."
+	}
+	if errText != "" {
+		s += " " + strings.TrimSuffix(errText, ".") + "."
+	}
+	return strings.TrimSpace(s)
+}
+
+// clip shortens s to n runes on one line.
+func clip(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // Attention is one thing that needs a look, most serious first.
@@ -126,6 +210,7 @@ type Host struct {
 	To            *time.Time         `json:"to"`
 	Points        []source.HostPoint `json:"points"`
 	Deploys       []Deploy           `json:"deploys"`
+	DeploySource  string             `json:"deploy_source"` // Lighthouse, or Sonar when Lighthouse can't be read
 	NotCollected  []string           `json:"not_collected"`
 }
 
@@ -184,9 +269,15 @@ type Inputs struct {
 	Range        string
 	Status       *source.SonarStatus
 	StatusState  source.Status
-	Current      *source.SonarHistory // the last hour, for current readings
-	History      *source.SonarHistory // the chosen range
-	Day          *source.SonarHistory // the last 24 hours, for failed deploys
+	Current      *source.SonarHistory          // the last hour, for current readings
+	History      *source.SonarHistory          // the chosen range
+	Day          *source.SonarHistory          // the last 24 hours, for failed deploys
+	Deploys      []source.LighthouseDeployment // the chosen range
+	DeploysKnown bool
+	DayDeploys   []source.LighthouseDeployment // the last 24 hours
+	DayKnown     bool
+	Lighthouse   []source.LighthouseProject
+	LHKnown      bool
 	RecentErrors []source.LogRecord
 	ErrorsKnown  bool
 	Gaps24h      []source.LogGap
@@ -205,10 +296,15 @@ func BuildOverview(in Inputs) Overview {
 	}
 
 	sonarCurrent := in.Status != nil && in.StatusState.State == source.OK
+	dayDeploys := pickDeploys(in.DayDeploys, in.DayKnown, in.Day)
 	lastDeploy := map[string]Deploy{}
-	if in.Day != nil {
-		for _, u := range in.Day.Updates {
-			lastDeploy[u.Project] = deployFrom(u) // oldest first, so the newest wins
+	for _, d := range dayDeploys {
+		lastDeploy[d.Project] = d // oldest first, so the newest wins
+	}
+	lhByKey := map[string]source.LighthouseProject{}
+	if in.LHKnown {
+		for _, p := range in.Lighthouse {
+			lhByKey[p.Key()] = p
 		}
 	}
 	if in.Status != nil {
@@ -229,6 +325,10 @@ func BuildOverview(in Inputs) Overview {
 			}
 			if d, ok := lastDeploy[p.Project]; ok {
 				row.LastDeploy = &d
+			}
+			if lp, ok := lhByKey[p.Project]; ok {
+				row.Lighthouse = &DeployState{State: lp.State, Mode: lp.DeployMode, Version: lp.DeployedVersion,
+					DeployedAt: lp.DeployedAt, LastError: lp.LastError, LastErrorAt: lp.LastErrorAt}
 			}
 			o.Projects = append(o.Projects, row)
 		}
@@ -257,6 +357,10 @@ func BuildOverview(in Inputs) Overview {
 	}
 
 	o.Host = buildHost(in)
+	o.Host.DeploySource = "Sonar"
+	if in.DeploysKnown {
+		o.Host.DeploySource = "Lighthouse"
+	}
 	o.Infrastructure = buildInfra(o.Projects)
 	if in.ErrorsKnown {
 		o.RecentErrors = in.RecentErrors
@@ -297,7 +401,8 @@ func stateRank(h Health) int {
 }
 
 func buildHost(in Inputs) Host {
-	h := Host{Range: in.Range, Points: []source.HostPoint{}, Deploys: []Deploy{}, NotCollected: notCollected}
+	h := Host{Range: in.Range, Points: []source.HostPoint{}, NotCollected: notCollected}
+	h.Deploys = pickDeploys(in.Deploys, in.DeploysKnown, in.History)
 	if in.Current != nil {
 		for i := len(in.Current.Points) - 1; i >= 0; i-- {
 			p := in.Current.Points[i]
@@ -314,9 +419,6 @@ func buildHost(in Inputs) Host {
 		h.From, h.To = &from, &to
 		h.BucketSeconds = in.History.BucketSeconds
 		h.Points = in.History.Points
-		for _, u := range in.History.Updates {
-			h.Deploys = append(h.Deploys, deployFrom(u))
-		}
 	}
 	return h
 }
@@ -379,14 +481,34 @@ func buildAttention(in Inputs, o Overview) []Attention {
 				Detail: "Sonar has no current measurement for it.", Source: "Sonar", Link: link})
 		}
 	}
-	if in.Day != nil {
-		for _, u := range in.Day.Updates {
-			if u.Outcome == "ok" {
+	for _, d := range pickDeploys(in.DayDeploys, in.DayKnown, in.Day) {
+		if d.Outcome == "ok" {
+			continue
+		}
+		at := d.Started
+		add(Attention{Level: "warn", Project: d.Project, Title: fmt.Sprintf("Deploy of %s %s", d.Project, d.Outcome),
+			Detail: deployDetail(d), Source: d.Source, At: &at, Link: "#/activity?project=" + d.Project})
+	}
+	if in.LHKnown {
+		for _, p := range in.Lighthouse {
+			if p.Kind == "publish" {
 				continue
 			}
-			at := u.Started
-			add(Attention{Level: "warn", Project: u.Project, Title: fmt.Sprintf("Deploy of %s %s", u.Project, u.Outcome),
-				Detail: versionChange(u.From, u.To), Source: "Sonar", At: &at, Link: "#/activity?project=" + u.Project})
+			a := Attention{Project: p.Key(), Source: "Lighthouse", At: p.LastErrorAt, Link: "#/projects/" + p.Key()}
+			if p.LastError != nil {
+				a.Detail = clip(*p.LastError, 200)
+			}
+			switch p.State {
+			case "broken":
+				a.Level, a.Title = "warn", "Lighthouse reports "+p.Key()+" as broken"
+			case "failing":
+				a.Level, a.Title = "warn", "Lighthouse reports "+p.Key()+"'s deploys failing"
+			case "stopped":
+				a.Level, a.Title, a.At = "info", p.Key()+" is stopped in Lighthouse", nil
+			default:
+				continue
+			}
+			add(a)
 		}
 	}
 	if in.Blackbox != nil {

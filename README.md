@@ -4,16 +4,17 @@ Vista is a private, read-only dashboard for Spark, the server Mobasity's project
 
 ## Features
 
-- See what needs attention first: projects that are down or degraded, failed deploys, log gaps and sources that stopped answering.
+- See what needs attention first: projects that are down or degraded, failed deploys, projects whose deploys keep failing, log gaps and sources that stopped answering.
 - Follow Spark apart from the projects: its CPU and memory, and the state of the services every project relies on.
 - Check every project's state, version, monitoring method, response time, 30- and 90-day uptime with coverage, and daily history.
-- Read deploys and log gaps on one timeline, filtered by project.
+- Read deploys and log gaps on one timeline, filtered by project, and open each deploy's steps and the output of the one that failed.
+- See each project's deploy state, the version it runs and its releases.
 - See the newest error lines across every project.
 - Search the logs every container wrote, open a line's fields, and read the lines around it.
 - Review availability and the days each project was down or degraded.
 - See where each piece of information comes from and how fresh it is. A source that can't be read is shown as unknown, never as zero or healthy.
 
-Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime, host measurements and deploys, and [Blackbox](https://github.com/lsariol/blackbox) for logs, through their read-only APIs, and only while a page is open. It has no controls: it can't deploy, restart, change settings or read secrets.
+Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime and host measurements, [Blackbox](https://github.com/lsariol/blackbox) for logs, and [Lighthouse](https://github.com/lsariol/lighthouse) for deploys and releases, through their read-only APIs, and only while a page is open. Without Lighthouse, it shows the container swaps Sonar saw instead. It has no controls: it can't deploy, restart, change settings or read secrets.
 
 ## Requirements
 
@@ -22,7 +23,7 @@ Vista collects and judges nothing itself: it shows what other services report. I
 
 ## Getting started
 
-Vista needs data to show. For a local run, `scripts/devsources` stands in for Sonar and Blackbox with made-up data. Start it in one terminal:
+Vista needs data to show. For a local run, `scripts/devsources` stands in for Sonar, Blackbox and Lighthouse with made-up data. Start it in one terminal:
 
 ```bash
 go run ./scripts/devsources
@@ -34,6 +35,7 @@ Then start Vista in another:
 APP_ENV=dev \
 VISTA_SONAR_URL=http://localhost:2599 VISTA_SONAR_TOKEN=dev \
 VISTA_BLACKBOX_URL=http://localhost:2599 VISTA_BLACKBOX_TOKEN=dev \
+VISTA_LIGHTHOUSE_URL=http://localhost:2599 VISTA_LIGHTHOUSE_TOKEN=dev \
 go run ./cmd/vista serve
 ```
 
@@ -57,6 +59,8 @@ Everything is read from the environment.
 | `VISTA_SONAR_TOKEN` | | Vista's bearer token for Sonar |
 | `VISTA_BLACKBOX_URL` | | Blackbox's API, such as `http://blackbox-api:3190` |
 | `VISTA_BLACKBOX_TOKEN` | | Vista's bearer token for Blackbox |
+| `VISTA_LIGHTHOUSE_URL` | | Lighthouse's read-only API, such as `http://lighthouse-api:2300` |
+| `VISTA_LIGHTHOUSE_TOKEN` | | Vista's bearer token for Lighthouse |
 
 A source without its address and token is shown as not connected; Vista still starts.
 
@@ -78,7 +82,7 @@ The dashboard is plain HTML, CSS and JavaScript in `internal/web/static`, built 
 | `cmd/vista` | The binary: `serve`, `health`, `version`, `help` |
 | `internal/access` | The Cloudflare Access check |
 | `internal/config` | Settings, read once and checked |
-| `internal/source` | Sonar and Blackbox clients, and the cache that keeps a source's last answer |
+| `internal/source` | Sonar, Blackbox and Lighthouse clients, and the cache that keeps a source's last answer |
 | `internal/dashboard` | The sources' answers arranged for each page |
 | `internal/web` | The HTTP server, Vista's JSON API and the pages |
 | `scripts/devsources` | Made-up sources for local runs |

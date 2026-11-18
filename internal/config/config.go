@@ -20,10 +20,12 @@ type Config struct {
 	AccessTeam string
 	AccessAUD  string
 
-	SonarURL      string
-	SonarToken    string
-	BlackboxURL   string
-	BlackboxToken string
+	SonarURL        string
+	SonarToken      string
+	BlackboxURL     string
+	BlackboxToken   string
+	LighthouseURL   string
+	LighthouseToken string
 }
 
 // AccessEnabled reports whether requests must carry a Cloudflare Access token.
@@ -40,15 +42,17 @@ func Load(getenv func(string) string) (Config, error) {
 		return def
 	}
 	c := Config{
-		Env:           get("APP_ENV", "prod"),
-		Addr:          get("VISTA_ADDR", ":3000"),
-		Version:       get("VISTA_VERSION", "dev"),
-		AccessTeam:    strings.ToLower(get("VISTA_ACCESS_TEAM", "")),
-		AccessAUD:     get("VISTA_ACCESS_AUD", ""),
-		SonarURL:      strings.TrimRight(get("VISTA_SONAR_URL", ""), "/"),
-		SonarToken:    get("VISTA_SONAR_TOKEN", ""),
-		BlackboxURL:   strings.TrimRight(get("VISTA_BLACKBOX_URL", ""), "/"),
-		BlackboxToken: get("VISTA_BLACKBOX_TOKEN", ""),
+		Env:             get("APP_ENV", "prod"),
+		Addr:            get("VISTA_ADDR", ":3000"),
+		Version:         get("VISTA_VERSION", "dev"),
+		AccessTeam:      strings.ToLower(get("VISTA_ACCESS_TEAM", "")),
+		AccessAUD:       get("VISTA_ACCESS_AUD", ""),
+		SonarURL:        strings.TrimRight(get("VISTA_SONAR_URL", ""), "/"),
+		SonarToken:      get("VISTA_SONAR_TOKEN", ""),
+		BlackboxURL:     strings.TrimRight(get("VISTA_BLACKBOX_URL", ""), "/"),
+		BlackboxToken:   get("VISTA_BLACKBOX_TOKEN", ""),
+		LighthouseURL:   strings.TrimRight(get("VISTA_LIGHTHOUSE_URL", ""), "/"),
+		LighthouseToken: get("VISTA_LIGHTHOUSE_TOKEN", ""),
 	}
 
 	var problems []error
@@ -68,6 +72,7 @@ func Load(getenv func(string) string) (Config, error) {
 	for _, u := range []struct{ key, value string }{
 		{"VISTA_SONAR_URL", c.SonarURL},
 		{"VISTA_BLACKBOX_URL", c.BlackboxURL},
+		{"VISTA_LIGHTHOUSE_URL", c.LighthouseURL},
 	} {
 		if u.value == "" {
 			continue
@@ -82,6 +87,9 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.BlackboxToken != "" && c.BlackboxURL == "" {
 		problems = append(problems, errors.New("VISTA_BLACKBOX_TOKEN is set without VISTA_BLACKBOX_URL"))
+	}
+	if c.LighthouseToken != "" && c.LighthouseURL == "" {
+		problems = append(problems, errors.New("VISTA_LIGHTHOUSE_TOKEN is set without VISTA_LIGHTHOUSE_URL"))
 	}
 	if err := errors.Join(problems...); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
