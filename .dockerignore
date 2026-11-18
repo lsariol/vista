@@ -1,0 +1,7 @@
+.dev
+.env
+.git
+*.png
+*.md
+!README.md
+vista-overview-concept.html
