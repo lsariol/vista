@@ -155,6 +155,43 @@ func TestFailedDeployNeedsAttention(t *testing.T) {
 	}
 }
 
+func TestDeploysPreferLighthouse(t *testing.T) {
+	sonarDay := &source.SonarHistory{Updates: []source.SonarUpdate{{Project: "lys", Started: now.Add(-time.Hour), Outcome: "ok"}}}
+	lh := []source.LighthouseDeployment{
+		{ID: 2, Project: "lys", Version: str("v1.1.0"), Status: "rolled_back", FailedStep: str("health"), StartedAt: now.Add(-20 * time.Minute), FinishedAt: now.Add(-18 * time.Minute)},
+		{ID: 1, Project: "lys", SHA: str("abcdef0123"), Status: "succeeded", StartedAt: now.Add(-2 * time.Hour), FinishedAt: now.Add(-2 * time.Hour).Add(time.Minute)},
+	}
+	got := pickDeploys(lh, true, sonarDay)
+	if len(got) != 2 || got[0].ID != 1 || *got[0].To != "abcdef0" || got[1].Outcome != "rolled back" || got[1].Source != "Lighthouse" {
+		t.Errorf("with Lighthouse: %+v", got)
+	}
+	if d := deployDetail(got[1]); d != "Version v1.1.0. Failed at health." {
+		t.Errorf("detail = %q", d)
+	}
+	if got := pickDeploys(nil, true, sonarDay); len(got) != 0 {
+		t.Errorf("Lighthouse answered with none, so none: %+v", got)
+	}
+	if got := pickDeploys(nil, false, sonarDay); len(got) != 1 || got[0].Source != "Sonar" {
+		t.Errorf("without Lighthouse: %+v", got)
+	}
+}
+
+func TestLighthouseStatesNeedAttention(t *testing.T) {
+	lys := "lys"
+	o := BuildOverview(Inputs{Now: now, StatusState: ok("sonar"), Status: status(source.SonarProject{Project: "lys", State: "operational"}),
+		LHKnown: true, Lighthouse: []source.LighthouseProject{
+			{Name: "Lys", ComposeProject: &lys, State: "failing", LastError: str("build: no space left"), DeployedVersion: str("v1.0.0")},
+			{Name: "plop", State: "ok"},
+			{Name: "blackboxlog", Kind: "publish", State: "broken"},
+		}})
+	if len(o.Attention) != 1 || o.Attention[0].Title != "Lighthouse reports lys's deploys failing" || o.Attention[0].Detail != "build: no space left" {
+		t.Errorf("attention = %+v", o.Attention)
+	}
+	if l := o.Projects[0].Lighthouse; l == nil || l.State != "failing" || *l.Version != "v1.0.0" {
+		t.Errorf("lys's Lighthouse state = %+v", l)
+	}
+}
+
 func TestMergeSourcesKeepsTheWorst(t *testing.T) {
 	got := mergeSources([]source.Status{
 		{ID: "sonar", State: source.OK},

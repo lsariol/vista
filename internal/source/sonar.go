@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// SonarStatus is Sonar's GET /v1/status: project states, versions and uptime.
+// SonarStatus is Sonar's GET /v1/monitor/status: every project's state,
+// version and uptime, the ones its public answer leaves out too.
 type SonarStatus struct {
 	GeneratedAt *time.Time `json:"generated_at"`
 	Fresh       bool       `json:"fresh"`
@@ -110,7 +111,7 @@ const statusDays = 90
 func sonarStatus(c *apiClient) func(context.Context) (SonarStatus, error) {
 	return func(ctx context.Context) (SonarStatus, error) {
 		var s SonarStatus
-		err := c.getJSON(ctx, "/v1/status", url.Values{"days": {strconv.Itoa(statusDays)}}, &s)
+		err := c.getJSON(ctx, "/v1/monitor/status", url.Values{"days": {strconv.Itoa(statusDays)}}, &s)
 		return s, err
 	}
 }

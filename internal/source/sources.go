@@ -21,13 +21,18 @@ type Set struct {
 	RecentErrors   *Cached[[]LogRecord]         // the newest error lines, last 24 hours
 	Gaps           map[string]*Cached[[]LogGap] // by range
 
-	blackbox *apiClient // nil when Blackbox isn't connected
+	LighthouseProjects *Cached[[]LighthouseProject]
+	Deployments        map[string]*Cached[[]LighthouseDeployment] // by range
+
+	blackbox   *apiClient // nil when Blackbox isn't connected
+	lighthouse *apiClient // nil when Lighthouse isn't connected
 }
 
 // Sonar's and Blackbox's Cove keys for Vista's tokens, named in error messages.
 const (
-	SonarTokenKey    = "SHARED_SONAR_VISTA_TOKEN"
-	BlackboxTokenKey = "SHARED_BLACKBOX_VISTA_TOKEN"
+	SonarTokenKey      = "SHARED_SONAR_VISTA_TOKEN"
+	BlackboxTokenKey   = "SHARED_BLACKBOX_VISTA_TOKEN"
+	LighthouseTokenKey = "SHARED_LIGHTHOUSE_VISTA_TOKEN"
 )
 
 // NewSet builds the sources the configuration connects.
@@ -35,6 +40,7 @@ func NewSet(cfg config.Config, log *slog.Logger) *Set {
 	s := &Set{
 		SonarHistory: map[string]*Cached[SonarHistory]{},
 		Gaps:         map[string]*Cached[[]LogGap]{},
+		Deployments:  map[string]*Cached[[]LighthouseDeployment]{},
 	}
 
 	var sonar *apiClient
@@ -66,8 +72,25 @@ func NewSet(cfg config.Config, log *slog.Logger) *Set {
 		}
 		s.Gaps[r] = NewCached("blackbox", "Blackbox", time.Minute, gaps, bbMissing, log)
 	}
+
+	if cfg.LighthouseURL != "" && cfg.LighthouseToken != "" {
+		s.lighthouse = newAPIClient("Lighthouse", cfg.LighthouseURL, cfg.LighthouseToken, LighthouseTokenKey)
+	}
+	lhMissing := "Set VISTA_LIGHTHOUSE_URL and VISTA_LIGHTHOUSE_TOKEN (Cove key " + LighthouseTokenKey + ")."
+	s.LighthouseProjects = NewCached("lighthouse", "Lighthouse", 30*time.Second, fetchOrNil(s.lighthouse, lighthouseProjects), lhMissing, log)
+	for _, r := range Ranges {
+		d, _ := RangeDuration(r)
+		var deploys func(context.Context) ([]LighthouseDeployment, error)
+		if s.lighthouse != nil {
+			deploys = lighthouseDeployments(s.lighthouse, d)
+		}
+		s.Deployments[r] = NewCached("lighthouse", "Lighthouse", 30*time.Second, deploys, lhMissing, log)
+	}
 	return s
 }
+
+// LighthouseConnected reports whether Vista has Lighthouse's address and token.
+func (s *Set) LighthouseConnected() bool { return s.lighthouse != nil }
 
 // fetchOrNil returns make(c), or nil when the client isn't connected.
 func fetchOrNil[T any](c *apiClient, make func(*apiClient) func(context.Context) (T, error)) func(context.Context) (T, error) {
@@ -79,6 +102,35 @@ func fetchOrNil[T any](c *apiClient, make func(*apiClient) func(context.Context)
 
 // ErrLogsNotConnected means Vista has no Blackbox token.
 var ErrLogsNotConnected = errors.New("Blackbox isn't connected: set VISTA_BLACKBOX_URL and VISTA_BLACKBOX_TOKEN (Cove key " + BlackboxTokenKey + ")")
+
+// ErrLighthouseNotConnected means Vista has no Lighthouse token.
+var ErrLighthouseNotConnected = errors.New("Lighthouse isn't connected: set VISTA_LIGHTHOUSE_URL and VISTA_LIGHTHOUSE_TOKEN (Cove key " + LighthouseTokenKey + ")")
+
+// Deployment returns one deploy with its steps, uncached.
+func (s *Set) Deployment(ctx context.Context, id int64) (LighthouseDeploymentDetail, error) {
+	if s.lighthouse == nil {
+		return LighthouseDeploymentDetail{}, ErrLighthouseNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var d LighthouseDeploymentDetail
+	err := s.lighthouse.getJSON(ctx, "/v1/deployments/"+strconv.FormatInt(id, 10), nil, &d)
+	return d, err
+}
+
+// Releases returns a project's version tags, newest first, uncached.
+func (s *Set) Releases(ctx context.Context, project string) ([]LighthouseRelease, error) {
+	if s.lighthouse == nil {
+		return nil, ErrLighthouseNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var a struct {
+		Releases []LighthouseRelease `json:"releases"`
+	}
+	err := s.lighthouse.getJSON(ctx, "/v1/releases", url.Values{"project": {project}, "limit": {"20"}}, &a)
+	return a.Releases, err
+}
 
 // LogQuery is a validated log search.
 type LogQuery struct {

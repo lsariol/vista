@@ -1,14 +1,16 @@
-// Command devsources stands in for Sonar and Blackbox on a development
+// Command devsources stands in for Sonar, Blackbox and Lighthouse on a development
 // machine, with made-up data, so Vista can be run and looked at locally.
 //
 //	go run ./scripts/devsources            # listens on :2599
 //	APP_ENV=dev VISTA_SONAR_URL=http://localhost:2599 VISTA_SONAR_TOKEN=dev \
 //	  VISTA_BLACKBOX_URL=http://localhost:2599 VISTA_BLACKBOX_TOKEN=dev \
+//	  VISTA_LIGHTHOUSE_URL=http://localhost:2599 VISTA_LIGHTHOUSE_TOKEN=dev \
 //	  go run ./cmd/vista serve
 package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -46,6 +48,11 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", status)
+	mux.HandleFunc("GET /v1/monitor/status", status)
+	mux.HandleFunc("GET /v1/projects", lhProjects)
+	mux.HandleFunc("GET /v1/deployments", lhDeployments)
+	mux.HandleFunc("GET /v1/deployments/{id}", lhDeployment)
+	mux.HandleFunc("GET /v1/releases", lhReleases)
 	mux.HandleFunc("GET /v1/status/history", history)
 	mux.HandleFunc("GET /v1/logs", logs)
 	mux.HandleFunc("GET /v1/logs/{id}/context", logContext)
@@ -283,4 +290,91 @@ func gaps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"gaps": []map[string]any{
 		{"kind": "collector_down", "container": nil, "from": now.Add(-5 * time.Hour), "to": now.Add(-5*time.Hour + 40*time.Second), "detail": "Blackbox's collector restarted", "noted_at": now.Add(-5 * time.Hour)},
 	}})
+}
+
+// lhProjects is Lighthouse's project list: lys keeps failing its tests.
+func lhProjects(w http.ResponseWriter, r *http.Request) {
+	out := []map[string]any{}
+	for _, p := range projects {
+		state, lastErr := "ok", any(nil)
+		if p.name == "lys" {
+			state, lastErr = "failing", "test: go test ./... failed: TestCommands (internal/commands)"
+		}
+		deployed := time.Now().UTC().Add(-time.Duration(len(p.name)) * time.Hour)
+		out = append(out, map[string]any{"name": p.name, "compose_project": p.name, "kind": "deploy", "deploy_mode": "releases",
+			"state": state, "deployed_version": p.version, "deployed_at": deployed, "failure_count": map[bool]int{true: 2}[state != "ok"],
+			"last_error": lastErr, "last_error_at": map[bool]any{true: time.Now().UTC().Add(-25 * time.Minute)}[state != "ok"]})
+	}
+	writeJSON(w, map[string]any{"projects": out})
+}
+
+// lhDeploys are the made-up deploys, newest first, as offsets from now.
+func lhDeploys() []map[string]any {
+	now := time.Now().UTC()
+	d := func(id int, project, version, status string, ago, took time.Duration, step, errText any) map[string]any {
+		return map[string]any{"id": id, "project": project, "version": version, "sha": "4f2a9c1e7b", "trigger": "check", "status": status,
+			"failure_kind": map[bool]any{true: "permanent"}[status != "succeeded"], "failed_step": step, "error": errText,
+			"started_at": now.Add(-ago), "finished_at": now.Add(-ago + took)}
+	}
+	return []map[string]any{
+		d(14, "mobasity-web", "v1.8.0", "succeeded", 2*time.Minute, 2*time.Minute, nil, nil),
+		d(13, "lys", "v0.6.0", "failed", 25*time.Minute, 70*time.Second, "test", "test: go test ./... failed: TestCommands (internal/commands)"),
+		d(12, "dibs", "v0.3.0", "rolled_back", 15*time.Minute+30*time.Minute, 2*time.Minute, "health", "health: dibs didn't become healthy within 60 s; rolled back to v0.2.9"),
+		d(11, "lys", "v0.5.1", "succeeded", 45*time.Minute, 41*time.Second, nil, nil),
+		d(10, "plop", "v1.3.0", "succeeded", 30*time.Hour, 50*time.Second, nil, nil),
+	}
+}
+
+func lhDeployments(w http.ResponseWriter, r *http.Request) {
+	from, _ := time.Parse(time.RFC3339, r.URL.Query().Get("from"))
+	out := []map[string]any{}
+	for _, d := range lhDeploys() {
+		if d["started_at"].(time.Time).After(from) {
+			out = append(out, d)
+		}
+	}
+	writeJSON(w, map[string]any{"deployments": out, "next_cursor": nil})
+}
+
+func lhDeployment(w http.ResponseWriter, r *http.Request) {
+	for _, d := range lhDeploys() {
+		if fmt.Sprint(d["id"]) != r.PathValue("id") {
+			continue
+		}
+		start := d["started_at"].(time.Time)
+		names := []string{"fetch", "inspect", "check", "test", "build", "backup", "swap", "health"}
+		steps := []map[string]any{}
+		failed := d["failed_step"]
+		status := "succeeded"
+		for i, n := range names {
+			st := map[string]any{"step": n, "status": status, "started_at": start.Add(time.Duration(i) * 8 * time.Second),
+				"finished_at": start.Add(time.Duration(i+1) * 8 * time.Second), "log": nil}
+			if status == "skipped" {
+				st["finished_at"] = st["started_at"]
+			}
+			if n == failed {
+				st["status"] = "failed"
+				st["log"] = "--- FAIL: TestCommands (0.02s)\n    commands_test.go:88: !uptime answered \"\", want a duration\nFAIL"
+				status = "skipped"
+			}
+			steps = append(steps, st)
+		}
+		d["steps"] = steps
+		writeJSON(w, d)
+		return
+	}
+	http.Error(w, `{"error":"no such deployment"}`, http.StatusNotFound)
+}
+
+func lhReleases(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC()
+	project := r.URL.Query().Get("project")
+	out := []map[string]any{}
+	if project == "lys" {
+		out = append(out, map[string]any{"tag": "v0.6.0", "sha": "4f2a9c1e7b", "status": "waiting", "note": "its deploy failed at test", "created_at": now.Add(-30 * time.Minute)})
+	}
+	out = append(out,
+		map[string]any{"tag": "v0.5.1", "sha": "9e1d22a0c4", "status": "published", "published_at": now.Add(-44 * time.Minute), "created_at": now.Add(-50 * time.Minute)},
+		map[string]any{"tag": "v0.5.0", "sha": "77ab01f3d9", "status": "published", "published_at": now.Add(-6 * 24 * time.Hour), "created_at": now.Add(-6 * 24 * time.Hour)})
+	writeJSON(w, map[string]any{"releases": out})
 }
