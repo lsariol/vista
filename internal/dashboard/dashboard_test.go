@@ -39,8 +39,8 @@ func TestProjectsSortWorstFirstAndCount(t *testing.T) {
 	if o.Projects[0].Monitoring != "containers only" || o.Projects[3].Monitoring != "outside check" {
 		t.Errorf("monitoring: %q, %q", o.Projects[0].Monitoring, o.Projects[3].Monitoring)
 	}
-	if o.Spark.State != Degraded {
-		t.Errorf("cove degraded should degrade Spark, got %s", o.Spark.State)
+	if o.Spark.State != Unknown {
+		t.Errorf("Vista doesn't judge Spark's state itself, got %s", o.Spark.State)
 	}
 	if len(o.Attention) < 2 || o.Attention[0].Level != "down" || o.Attention[0].Project != "dibs" {
 		t.Errorf("attention = %+v", o.Attention)
@@ -91,28 +91,37 @@ func TestFreshFalseIsUnknown(t *testing.T) {
 	}
 }
 
-func TestErrorCountsAndBlackboxMissing(t *testing.T) {
-	recs := []source.LogRecord{{Project: str("lys")}, {Project: str("lys")}, {Container: "loose"}}
-	in := Inputs{Now: now, StatusState: ok("sonar"),
-		Status:    status(source.SonarProject{Project: "lys", State: "operational"}, source.SonarProject{Project: "dibs", State: "operational"}),
-		Errors24h: &source.ErrorWindow{Records: recs, Truncated: true}}
-	o := BuildOverview(in)
-	by := map[string]*Count{}
-	for _, p := range o.Projects {
-		by[p.Name] = p.Errors24h
+func TestRecentErrorsAndBlackboxMissing(t *testing.T) {
+	recs := []source.LogRecord{{ID: 2, Project: str("lys")}, {ID: 1, Container: "loose"}}
+	in := Inputs{Now: now, StatusState: ok("sonar"), Status: status(), RecentErrors: recs, ErrorsKnown: true}
+	if got := BuildOverview(in).RecentErrors; len(got) != 2 || got[0].ID != 2 {
+		t.Errorf("recent errors = %+v", got)
 	}
-	if c := by["lys"]; c == nil || c.N != 2 || !c.AtLeast {
-		t.Errorf("lys errors = %+v", c)
+	in.RecentErrors = nil
+	if got := BuildOverview(in).RecentErrors; got == nil || len(got) != 0 {
+		t.Errorf("no errors should be an empty list, got %v", got)
 	}
-	if c := by["dibs"]; c == nil || c.N != 0 {
-		t.Errorf("dibs errors = %+v", c)
+	in.ErrorsKnown = false
+	if got := BuildOverview(in).RecentErrors; got != nil {
+		t.Errorf("without Blackbox the list should be unknown, got %v", got)
 	}
+}
 
-	in.Errors24h = nil
-	for _, p := range BuildOverview(in).Projects {
-		if p.Errors24h != nil {
-			t.Errorf("%s has an error count without Blackbox", p.Name)
-		}
+func TestInfrastructureNotReportedIsUnknown(t *testing.T) {
+	o := BuildOverview(Inputs{Now: now, StatusState: ok("sonar"),
+		Status: status(source.SonarProject{Project: "cove", State: "down", Version: str("v1.4.0")})})
+	by := map[string]Infra{}
+	for _, i := range o.Infrastructure {
+		by[i.Name] = i
+	}
+	if len(o.Infrastructure) != len(infrastructure) {
+		t.Fatalf("infrastructure = %+v", o.Infrastructure)
+	}
+	if c := by["cove"]; !c.Reported || c.State != Down || *c.Version != "v1.4.0" {
+		t.Errorf("cove = %+v", c)
+	}
+	if s := by["sparkdb"]; s.Reported || s.State != Unknown {
+		t.Errorf("sparkdb = %+v", s)
 	}
 }
 
@@ -127,14 +136,13 @@ func TestCurrentReadingSkipsGaps(t *testing.T) {
 	}
 }
 
-func TestFailedDeployAndProbeNeedAttention(t *testing.T) {
+func TestFailedDeployNeedsAttention(t *testing.T) {
 	day := &source.SonarHistory{Updates: []source.SonarUpdate{
 		{Project: "lys", Started: now.Add(-time.Hour), From: str("v1.0.0"), To: str("v1.1.0"), Outcome: "failed"},
 		{Project: "lys", Started: now.Add(-30 * time.Minute), From: str("v1.0.0"), To: str("v1.0.1"), Outcome: "ok"},
 	}}
 	o := BuildOverview(Inputs{Now: now, StatusState: ok("sonar"), Status: status(source.SonarProject{Project: "lys", State: "operational"}),
-		Day: day, ProbesKnown: true,
-		Probes: []source.Probe{{ID: "cove", Name: "Cove", Result: source.ProbeResult{Healthy: false, Detail: "answered 503 Service Unavailable"}}}})
+		Day: day})
 	if o.Projects[0].LastDeploy == nil || *o.Projects[0].LastDeploy.To != "v1.0.1" {
 		t.Errorf("last deploy = %+v", o.Projects[0].LastDeploy)
 	}
@@ -142,14 +150,8 @@ func TestFailedDeployAndProbeNeedAttention(t *testing.T) {
 	for _, a := range o.Attention {
 		titles = append(titles, a.Title)
 	}
-	joined := strings.Join(titles, " | ")
-	for _, want := range []string{"Deploy of lys failed", "Cove's health check failed"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("attention %q lacks %q", joined, want)
-		}
-	}
-	if o.Spark.State != Degraded {
-		t.Errorf("spark = %s", o.Spark.State)
+	if joined := strings.Join(titles, " | "); !strings.Contains(joined, "Deploy of lys failed") {
+		t.Errorf("attention %q lacks the failed deploy", joined)
 	}
 }
 
@@ -165,24 +167,16 @@ func TestMergeSourcesKeepsTheWorst(t *testing.T) {
 	}
 }
 
-func TestActivityGroupsErrors(t *testing.T) {
+func TestActivityNewestFirst(t *testing.T) {
 	base := now.Truncate(time.Hour)
-	recs := []source.LogRecord{ // newest first, as Blackbox returns them
-		{ID: 9, Time: base.Add(50 * time.Minute), Project: str("lys"), Message: "Twitch:   connection\nrefused", Version: str("v1.1.0")},
-		{ID: 8, Time: base.Add(10 * time.Minute), Project: str("lys"), Message: "older"},
-		{ID: 7, Time: base.Add(-10 * time.Minute), Project: str("lys"), Message: "previous hour"},
-	}
-	a := BuildActivity(ActivityInputs{Now: now, Range: "24h", Errors: &source.ErrorWindow{Records: recs},
-		History: &source.SonarHistory{Updates: []source.SonarUpdate{{Project: "dibs", Started: base.Add(20 * time.Minute), Ended: base.Add(21 * time.Minute), To: str("v2.0.0"), Outcome: "ok"}}}})
-	if len(a.Events) != 3 {
+	a := BuildActivity(ActivityInputs{Now: now, Range: "24h",
+		History: &source.SonarHistory{Updates: []source.SonarUpdate{{Project: "dibs", Started: base.Add(20 * time.Minute), Ended: base.Add(21 * time.Minute), To: str("v2.0.0"), Outcome: "ok"}}},
+		Gaps:    []source.LogGap{{Kind: "collector_down", Container: str("lys"), From: base.Add(30 * time.Minute), To: base.Add(35 * time.Minute)}}})
+	if len(a.Events) != 2 {
 		t.Fatalf("events = %+v", a.Events)
 	}
-	first := a.Events[0]
-	if first.Kind != "errors" || first.Title != "lys logged 2 error lines" || first.LogID != 9 || first.Detail != "Newest: Twitch: connection refused" {
-		t.Errorf("first = %+v", first)
-	}
-	if a.Events[1].Kind != "deploy" || a.Events[1].Title != "dibs deployed v2.0.0" {
-		t.Errorf("second = %+v", a.Events[1])
+	if a.Events[0].Kind != "log_gap" || a.Events[1].Kind != "deploy" || a.Events[1].Title != "dibs deployed v2.0.0" {
+		t.Errorf("events = %+v", a.Events)
 	}
 	if strings.Join(a.Projects, ",") != "dibs,lys" {
 		t.Errorf("projects = %v", a.Projects)

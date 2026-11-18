@@ -6,30 +6,22 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/lsariol/vista/internal/config"
 )
 
-// Set is every source Vista reads, each behind its cache.
+// Set is every source Vista reads, each behind a short cache. Vista asks
+// only when a page does; it collects nothing on its own.
 type Set struct {
 	SonarStatus    *Cached[SonarStatus]
 	SonarHistory   map[string]*Cached[SonarHistory] // by range
 	BlackboxStatus *Cached[BlackboxStatus]
 	LogSources     *Cached[[]LogSource]
-	Errors         map[string]*Cached[ErrorWindow] // by range
-	Gaps           map[string]*Cached[[]LogGap]    // by range
-	Probes         *Cached[[]Probe]
+	RecentErrors   *Cached[[]LogRecord]         // the newest error lines, last 24 hours
+	Gaps           map[string]*Cached[[]LogGap] // by range
 
 	blackbox *apiClient // nil when Blackbox isn't connected
-}
-
-// Probe is one infrastructure service's health endpoint and its answer.
-type Probe struct {
-	ID     string      `json:"id"`
-	Name   string      `json:"name"`
-	Result ProbeResult `json:"result"`
 }
 
 // Sonar's and Blackbox's Cove keys for Vista's tokens, named in error messages.
@@ -42,7 +34,6 @@ const (
 func NewSet(cfg config.Config, log *slog.Logger) *Set {
 	s := &Set{
 		SonarHistory: map[string]*Cached[SonarHistory]{},
-		Errors:       map[string]*Cached[ErrorWindow]{},
 		Gaps:         map[string]*Cached[[]LogGap]{},
 	}
 
@@ -66,32 +57,15 @@ func NewSet(cfg config.Config, log *slog.Logger) *Set {
 	bbMissing := "Set VISTA_BLACKBOX_URL and VISTA_BLACKBOX_TOKEN (Cove key " + BlackboxTokenKey + ")."
 	s.BlackboxStatus = NewCached("blackbox", "Blackbox", 15*time.Second, fetchOrNil(s.blackbox, blackboxStatus), bbMissing, log)
 	s.LogSources = NewCached("blackbox", "Blackbox", time.Minute, fetchOrNil(s.blackbox, blackboxSources), bbMissing, log)
+	s.RecentErrors = NewCached("blackbox", "Blackbox", 30*time.Second, fetchOrNil(s.blackbox, blackboxRecentErrors), bbMissing, log)
 	for _, r := range Ranges {
 		d, _ := RangeDuration(r)
-		var errs func(context.Context) (ErrorWindow, error)
 		var gaps func(context.Context) ([]LogGap, error)
 		if s.blackbox != nil {
-			errs, gaps = blackboxErrors(s.blackbox, d), blackboxGaps(s.blackbox, d)
+			gaps = blackboxGaps(s.blackbox, d)
 		}
-		s.Errors[r] = NewCached("blackbox", "Blackbox", 30*time.Second, errs, bbMissing, log)
 		s.Gaps[r] = NewCached("blackbox", "Blackbox", time.Minute, gaps, bbMissing, log)
 	}
-
-	var probes []probe
-	if cfg.CoveURL != "" {
-		probes = append(probes, newProbe("Cove", cfg.CoveURL+"/v0/ready"))
-	}
-	if cfg.SonarURL != "" {
-		probes = append(probes, newProbe("Sonar API", cfg.SonarURL+"/healthz"))
-	}
-	if cfg.BlackboxURL != "" {
-		probes = append(probes, newProbe("Blackbox API", cfg.BlackboxURL+"/healthz"))
-	}
-	var probeAll func(context.Context) ([]Probe, error)
-	if len(probes) > 0 {
-		probeAll = func(ctx context.Context) ([]Probe, error) { return runProbes(ctx, probes), nil }
-	}
-	s.Probes = NewCached("probes", "Health checks", 10*time.Second, probeAll, "Set VISTA_COVE_URL, VISTA_SONAR_URL or VISTA_BLACKBOX_URL.", log)
 	return s
 }
 
@@ -101,27 +75,6 @@ func fetchOrNil[T any](c *apiClient, make func(*apiClient) func(context.Context)
 		return nil
 	}
 	return make(c)
-}
-
-// probeIDs are stable identifiers for the probes, for the dashboard.
-var probeIDs = map[string]string{"Cove": "cove", "Sonar API": "sonar-api", "Blackbox API": "blackbox-api"}
-
-func runProbes(ctx context.Context, probes []probe) []Probe {
-	out := make([]Probe, len(probes))
-	var wg sync.WaitGroup
-	for i, p := range probes {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			res, err := p.check(ctx)
-			if err != nil {
-				res = ProbeResult{Detail: err.Error()}
-			}
-			out[i] = Probe{ID: probeIDs[p.name], Name: p.name, Result: res}
-		}()
-	}
-	wg.Wait()
-	return out
 }
 
 // ErrLogsNotConnected means Vista has no Blackbox token.

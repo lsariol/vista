@@ -225,7 +225,7 @@ a:hover { text-decoration: underline; }
 .event-src { color: var(--muted); font-size: 11px; text-align: right; }
 .kind { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 10.5px; white-space: nowrap; background: #173550; color: #9dd1fa; }
 .kind.deploy { background: #0f3a2c; color: var(--green); }
-.kind.deploy_failed, .kind.errors { background: #3b1520; color: #ff8a9b; }
+.kind.deploy_failed { background: #3b1520; color: #ff8a9b; }
 .kind.log_gap { background: #3a2c10; color: var(--yellow); }
 
 /* Logs */

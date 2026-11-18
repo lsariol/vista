@@ -45,8 +45,6 @@ func fakeSources(t *testing.T) (*httptest.Server, *[]string) {
 			io.WriteString(w, `{"gaps":[]}`)
 		case "/v1/sources":
 			io.WriteString(w, `{"sources":[]}`)
-		case "/healthz":
-			io.WriteString(w, `{"status":"ok","version":"v0.1.0"}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -132,24 +130,27 @@ func TestOverviewWithSources(t *testing.T) {
 	var o struct {
 		Spark    struct{ State string }
 		Projects []struct {
-			Name      string
-			State     string
-			Errors24h *struct{ N int } `json:"errors_24h"`
+			Name  string
+			State string
 		}
 		Host struct {
 			CPU *struct{ Pct float64 }
 		}
+		RecentErrors []struct{ ID int64 } `json:"recent_errors"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &o); err != nil {
 		t.Fatal(err)
 	}
-	if len(o.Projects) != 1 || o.Projects[0].State != "healthy" || o.Projects[0].Errors24h == nil || o.Projects[0].Errors24h.N != 1 {
+	if len(o.Projects) != 1 || o.Projects[0].State != "healthy" {
 		t.Errorf("projects = %+v", o.Projects)
+	}
+	if len(o.RecentErrors) != 1 || o.RecentErrors[0].ID != 5 {
+		t.Errorf("recent errors = %+v", o.RecentErrors)
 	}
 	if o.Host.CPU == nil || o.Host.CPU.Pct != 10 {
 		t.Errorf("cpu = %+v", o.Host.CPU)
 	}
-	if o.Spark.State != "healthy" {
+	if o.Spark.State != "unknown" { // Sonar doesn't report the server's conditions yet
 		t.Errorf("spark = %s", o.Spark.State)
 	}
 }

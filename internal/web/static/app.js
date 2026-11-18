@@ -131,7 +131,7 @@
   // ---------- Pages and routing ----------
   const PAGES = [
     { id: 'overview', label: 'Overview', ico: '⌂', render: renderOverview, auto: true, sub: 'What needs attention on Spark and its projects' },
-    { id: 'projects', label: 'Projects', ico: '◇', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version, availability and errors' },
+    { id: 'projects', label: 'Projects', ico: '◇', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version and availability' },
     { id: 'spark', label: 'Spark', ico: 'ϟ', render: renderSpark, auto: true, sub: 'The server itself: its resources and the infrastructure every project relies on' },
     { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys, error bursts and log gaps on one timeline' },
     { id: 'logs', label: 'Logs', ico: '▤', render: renderLogs, auto: false, sub: 'Search what every container wrote, kept by Blackbox' },
@@ -250,12 +250,6 @@
     }
     return s('svg', { class: 'spark-line', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' },
       d ? s('path', { d, fill: 'none', stroke: '#27aafc', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }) : null);
-  }
-
-  function errorsCell(c) {
-    if (!c) return h('span', { class: 'muted', title: 'Blackbox can\'t be read' }, '—');
-    const text = `${c.n}${c.at_least ? '+' : ''}`;
-    return c.n ? h('span', { class: 'red' }, text) : h('span', { class: 'muted' }, '0');
   }
 
   // ---------- Charts ----------
@@ -418,8 +412,7 @@
     const o = await loadOverview();
     const cpuVals = o.host.points.map((p) => (p.cpu_pct ? p.cpu_pct.avg : null));
     const memVals = o.host.points.map((p) => (p.mem_used_pct ? p.mem_used_pct.avg : null));
-    const errs = o.projects.map((p) => p.errors_24h).filter(Boolean);
-    const errTotal = errs.reduce((a, c) => a + c.n, 0);
+    const errs = o.recent_errors; // null when Blackbox can't be read
     const t = o.totals;
 
     const kpis = h('div', { class: 'grid grid-kpis' },
@@ -432,8 +425,8 @@
         o.host.cpu ? `Average at ${fmtTime(o.host.cpu.at)}` : 'Not available', sparkline(cpuVals)),
       kpi('▥', 'Memory', h('div', { class: 'big' }, o.host.memory ? fmtPct(o.host.memory.pct) : '—'),
         o.host.memory ? `In use at ${fmtTime(o.host.memory.at)}` : 'Not available', sparkline(memVals)),
-      kpi('⚠', 'Errors, 24 hours', h('div', { class: `big ${errTotal ? 'red' : ''}` }, errs.length ? `${errTotal}${errs.some((c) => c.at_least) ? '+' : ''}` : '—'),
-        errs.length ? `${o.projects.filter((p) => p.errors_24h && p.errors_24h.n).length} projects logged errors` : 'Blackbox not answering'),
+      kpi('⚠', 'Newest error', h('div', { class: `big ${errs && errs.length ? 'red' : ''}` }, errs ? (errs.length ? ago(errs[0].ts) : 'None') : '—'),
+        errs ? (errs.length ? `From ${errs[0].project || errs[0].container}` : 'No error lines in 24 hours') : 'Blackbox not answering'),
       kpi('▤', 'Log storage', h('div', { class: 'big' }, o.logs ? fmtBytes(o.logs.stored_bytes) : '—'),
         o.logs ? `of ${fmtBytes(o.logs.max_bytes)} · oldest ${ago(o.logs.oldest)}` : 'Blackbox not answering',
         o.logs && o.logs.max_bytes ? storageBar(o.logs) : null),
@@ -453,9 +446,20 @@
           hostChart(o.host)),
         deploysPanel(o.host.deploys, o.host.range)),
       projectsTable(o.projects, { title: 'Projects', compact: true }),
+      recentErrorsPanel(errs),
       h('p', { class: 'note' }, 'States, versions, uptime and host measurements come from Sonar; errors and log storage from Blackbox. ',
         'Anything a source can\'t say is shown as unknown or “—”, never as zero or healthy.'),
     ];
+  }
+
+  function recentErrorsPanel(errs) {
+    return h('article', { class: 'card panel' },
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⚠'), 'Newest errors'),
+        h('a', { href: hashFor('logs', { level: 'error', range: '24h' }) }, 'All errors in Logs')),
+      !errs ? h('div', { class: 'empty' }, 'Blackbox can\'t be read.')
+        : errs.length ? h('div', { class: 'logs' }, errs.map((r) => logRow(r, { compact: true })))
+          : h('div', { class: 'empty' }, 'No error lines in the last 24 hours.'),
+      h('p', { class: 'note' }, 'The newest error lines Blackbox holds. Error counts per project appear once Blackbox serves them.'));
   }
 
   function progress(t) {
@@ -519,13 +523,12 @@
     compact ? null : h('td', { class: 'muted' }, p.monitoring),
     h('td', { class: 'num' }, isNum(p.response_ms) ? `${p.response_ms} ms` : '—'),
     h('td', { class: 'num' }, fmtUptime(p.uptime_30d), h('div', { class: 'cov' }, `${Math.round(p.uptime_30d.coverage_pct)}% observed`)),
-    h('td', { class: 'num' }, errorsCell(p.errors_24h)),
     h('td', null, dayStrip(p.days.slice(-30))));
 
     const head = h('tr', null, h('th', null, 'Project'), h('th', null, 'Status'), h('th', null, 'Version'),
       compact ? null : h('th', null, 'Monitoring'), h('th', { class: 'num' }, 'Response'), h('th', { class: 'num' }, 'Uptime 30d'),
-      h('th', { class: 'num' }, 'Errors 24h'), h('th', null, 'Last 30 days'));
-    const cols = compact ? 7 : 8;
+      h('th', null, 'Last 30 days'));
+    const cols = compact ? 6 : 7;
     let body;
     if (!rows.length) {
       body = [h('tr', null, h('td', { colspan: cols, class: 'empty' }, projects.length ? 'No projects match.' : 'No projects: Sonar can\'t be read.'))];
@@ -646,17 +649,11 @@
           h('div', { class: `big t-${o.spark.state}` }, '● ', LABEL[o.spark.state]),
           o.spark.reasons.length
             ? h('ul', { class: 'notes' }, o.spark.reasons.map((r) => h('li', null, r)))
-            : h('p', { class: 'note' }, 'Sonar is measuring, the infrastructure answers its health checks, and no infrastructure project is down or degraded.'),
+            : null,
           h('div', { class: 'section' },
             kv('CPU now', o.host.cpu ? `${fmtPct(o.host.cpu.pct, 1)} at ${fmtTime(o.host.cpu.at)}` : '—'),
             kv('Memory now', o.host.memory ? `${fmtPct(o.host.memory.pct, 1)} at ${fmtTime(o.host.memory.at)}` : '—'))),
-        h('article', { class: 'card panel' },
-          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◉'), 'Health checks')),
-          o.infrastructure.length ? o.infrastructure.map((i) => h('div', { class: 'list-row' },
-            h('div', { class: 'list-main' }, h('strong', null, i.name), h('small', null, i.detail || (i.version ? `Version ${i.version}` : 'Answering'))),
-            badge(i.state)))
-            : h('div', { class: 'empty' }, 'No health checks are set up.'),
-          h('p', { class: 'note' }, 'Each service\'s own health endpoint, asked without credentials.')),
+        infraCard(o.infrastructure),
         logsCard(o.logs)),
       h('article', { class: 'card panel grid' },
         h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '〽'), 'Host CPU and memory'),
@@ -666,8 +663,18 @@
       h('article', { class: 'card panel' },
         h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '○'), 'Not collected yet')),
         h('div', { class: 'bars' }, o.host.not_collected.map((n) => h('div', { class: 'list-row' }, h('span', null, n), badge('not_connected', 'Not available')))),
-        h('p', { class: 'note' }, 'Sonar stores part of this already but serves only the public status summary. These appear here once Sonar serves owner detail to Vista.')),
+        h('p', { class: 'note' }, 'These appear here once Sonar collects and serves them to Vista.')),
     ];
+  }
+
+  function infraCard(infra) {
+    return h('article', { class: 'card panel' },
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◉'), 'Infrastructure')),
+      infra.map((i) => h('div', { class: 'list-row' },
+        h('div', { class: 'list-main' }, h('strong', null, i.name),
+          h('small', null, i.reported ? (i.version ? `Version ${i.version}` : 'Version unknown') : 'Sonar doesn\'t report it yet')),
+        i.reported ? badge(i.state) : badge('not_connected', 'Not reported'))),
+      h('p', { class: 'note' }, 'As Sonar reports them. Vista runs no checks of its own.'));
   }
 
   function logsCard(l) {
@@ -693,7 +700,7 @@
     const kind = params.get('kind') || '';
     const events = a.events.filter((e) => (!project || e.project === project) && (!kind || e.kind === kind));
     const nav = (changes) => { location.hash = hashFor('activity', { range: params.get('range'), project, kind, ...changes }); };
-    const kinds = { deploy: 'Deploy', deploy_failed: 'Failed deploy', errors: 'Errors', log_gap: 'Log gap' };
+    const kinds = { deploy: 'Deploy', deploy_failed: 'Failed deploy', log_gap: 'Log gap' };
     const projects = project && !a.projects.includes(project) ? [...a.projects, project] : a.projects;
     return [
       heading(page),
@@ -708,16 +715,13 @@
         h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⌁'), 'Timeline'),
           h('span', { class: 'muted' }, plural(events.length, 'event', 'events'))),
         events.length ? events.map((e) => h('div', { class: 'event' },
-          e.kind === 'errors' && e.end
-            ? h('div', { class: 'event-time', title: `${fmtFull(e.at)} to ${fmtFull(e.end)}` }, fmtTime(e.end), h('div', null, `from ${fmtTime(e.at)}`))
-            : h('div', { class: 'event-time', title: fmtFull(e.at) }, fmtTime(e.at)),
+          h('div', { class: 'event-time', title: fmtFull(e.at) }, fmtTime(e.at)),
           h('div', null, h('span', { class: `kind ${e.kind}` }, kinds[e.kind] || e.kind)),
           h('div', null,
             h('div', { class: 'event-title' }, e.title),
             e.detail ? h('div', { class: 'event-detail' }, e.detail) : null,
             h('div', { class: 'log-actions' },
-              e.link ? h('a', { href: e.link }, e.kind === 'errors' ? 'These errors' : 'Logs around it') : null,
-              e.log_id ? h('a', { href: hashFor('logs', { around: e.log_id }) }, 'Newest line in context') : null)),
+              e.link ? h('a', { href: e.link }, 'Logs around it') : null)),
           h('div', { class: 'event-src' }, e.source)))
           : h('div', { class: 'empty' }, 'Nothing happened in this range, as far as the connected sources know.')),
       h('ul', { class: 'notes' }, a.notes.map((n) => h('li', null, n))),
@@ -901,8 +905,9 @@
   // ---------- Sources ----------
   const SOURCE_INFO = {
     sonar: { gives: 'Project states, versions, uptime and daily history; host CPU and memory; deploys.',
-      missing: 'Owner detail: per-project resources, disk, network, load, restarts, and when each state change began.' },
-    blackbox: { gives: 'Log search, the lines around a line, log sources, gaps and collection health.' },
+      missing: 'Spark\'s own conditions, the projects the public status leaves out, per-project resources, disk, network, load, restarts, and when each state change began.' },
+    blackbox: { gives: 'Log search, the lines around a line, the newest errors, log sources, gaps and collection health.',
+      missing: 'Error counts per project and hour.' },
     lighthouse: { gives: 'Deploy records, rollbacks and the version each project runs.',
       missing: 'A read-only API on the spark network. Until then, deploys come from Sonar.' },
     apps: { gives: 'Usage counts each application defines, such as games played or commands run.',
@@ -925,13 +930,8 @@
               x.checked_at ? `Checked ${ago(x.checked_at)}` : '', x.last_ok ? ` · last answer ${ago(x.last_ok)}` : ' · no answer yet') : null),
           badge(x.state));
       })),
-      h('article', { class: 'card panel grid' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◉'), 'Health checks')),
-        o.infrastructure.length ? o.infrastructure.map((i) => h('div', { class: 'list-row' },
-          h('div', { class: 'list-main' }, h('strong', null, i.name), h('small', null, i.detail || (i.version ? `Version ${i.version}` : 'Answering'))),
-          badge(i.state))) : h('div', { class: 'empty' }, 'No health checks are set up.')),
       h('ul', { class: 'notes' },
-        h('li', null, 'Vista only reads. It holds no credentials that can change a project, deploy, restart or read a secret.'),
+        h('li', null, 'Vista only shows what these sources report. It collects nothing itself, and holds no credentials that can change a project, deploy, restart or read a secret.'),
         h('li', null, 'When a source stops answering, Vista keeps its last answer, marks it stale, and shows live states as unknown.')),
     ];
   }

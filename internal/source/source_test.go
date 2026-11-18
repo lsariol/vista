@@ -106,21 +106,3 @@ func TestUnreachableSource(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
-
-func TestProbe(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ok" {
-			io.WriteString(w, `{"status":"ok","version":"v1.2.3"}`)
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-	res := runProbes(context.Background(), []probe{newProbe("Sonar API", srv.URL+"/ok"), newProbe("Cove", srv.URL+"/v0/ready")})
-	if !res[0].Result.Healthy || res[0].Result.Version != "v1.2.3" || res[0].ID != "sonar-api" {
-		t.Errorf("healthy probe: %+v", res[0])
-	}
-	if res[1].Result.Healthy || !strings.Contains(res[1].Result.Detail, "503") {
-		t.Errorf("failing probe: %+v", res[1])
-	}
-}

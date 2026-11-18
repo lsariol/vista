@@ -1,6 +1,7 @@
-// Package dashboard turns the sources' answers into what Vista's pages show.
-// Everything here is a pure function of those answers, so the rules (what is
-// unknown, what needs attention) live in one tested place.
+// Package dashboard arranges the sources' answers for Vista's pages. It
+// judges nothing itself: states, conditions and counts are what Sonar and
+// Blackbox report. What it adds is presentation (order, grouping) and the
+// rule that an answer it doesn't have is shown as unknown.
 package dashboard
 
 import (
@@ -37,10 +38,17 @@ func fromSonar(s string) Health {
 	return Unknown
 }
 
-// infrastructure are the projects Spark itself runs on. Their trouble is
-// Spark's trouble, shown apart from the apps.
-var infrastructure = map[string]bool{
-	"sparkdb": true, "cove": true, "lighthouse": true, "cloudflared": true, "sonar": true, "blackbox": true,
+// infrastructure are the projects Spark itself runs on, in the order they're
+// listed, shown apart from the apps until Sonar reports each project's tier.
+var infrastructure = []string{"sparkdb", "cove", "lighthouse", "cloudflared", "sonar", "blackbox"}
+
+func isInfrastructure(name string) bool {
+	for _, n := range infrastructure {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Project is one project's row.
@@ -55,14 +63,7 @@ type Project struct {
 	Uptime30d      source.Uptime     `json:"uptime_30d"`
 	Uptime90d      source.Uptime     `json:"uptime_90d"`
 	Days           []source.SonarDay `json:"days"`
-	Errors24h      *Count            `json:"errors_24h"` // nil when Blackbox can't be read
 	LastDeploy     *Deploy           `json:"last_deploy"`
-}
-
-// Count is a number that may be a lower bound.
-type Count struct {
-	N       int  `json:"n"`
-	AtLeast bool `json:"at_least"`
 }
 
 // Deploy is one deploy as Sonar saw it.
@@ -93,16 +94,17 @@ type Attention struct {
 
 var levelRank = map[string]int{"down": 0, "degraded": 1, "unknown": 2, "warn": 3, "info": 4}
 
-// Infra is one infrastructure service's own health check.
+// Infra is one infrastructure project as Sonar reports it. Reported is false
+// when Sonar's answer doesn't include it.
 type Infra struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	State   Health `json:"state"`
-	Version string `json:"version,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	Name     string  `json:"name"`
+	State    Health  `json:"state"`
+	Version  *string `json:"version"`
+	Reported bool    `json:"reported"`
 }
 
-// Spark is the server's own health, apart from the apps.
+// Spark is the server's own health, apart from the apps. Sonar doesn't
+// report it yet, so it's unknown, with the reasons why.
 type Spark struct {
 	State   Health   `json:"state"`
 	Reasons []string `json:"reasons"`
@@ -132,8 +134,11 @@ var notCollected = []string{
 	"Disk space",
 	"Network traffic",
 	"Load average",
-	"Per-project CPU, memory and network",
+	"Swap",
+	"Per-project CPU, memory, network and disk",
+	"Database connections and size per project",
 	"Container restarts",
+	"Conditions such as low disk space",
 }
 
 // Totals counts projects by state.
@@ -160,15 +165,16 @@ type LogsSummary struct {
 
 // Overview is the Overview page, and the base of Projects, Spark and Sources.
 type Overview struct {
-	GeneratedAt    time.Time       `json:"generated_at"`
-	Sources        []source.Status `json:"sources"`
-	Spark          Spark           `json:"spark"`
-	Host           Host            `json:"host"`
-	Totals         Totals          `json:"totals"`
-	Projects       []Project       `json:"projects"`
-	Attention      []Attention     `json:"attention"`
-	Infrastructure []Infra         `json:"infrastructure"`
-	Logs           *LogsSummary    `json:"logs"`
+	GeneratedAt    time.Time          `json:"generated_at"`
+	Sources        []source.Status    `json:"sources"`
+	Spark          Spark              `json:"spark"`
+	Host           Host               `json:"host"`
+	Totals         Totals             `json:"totals"`
+	Projects       []Project          `json:"projects"`
+	Attention      []Attention        `json:"attention"`
+	Infrastructure []Infra            `json:"infrastructure"`
+	Logs           *LogsSummary       `json:"logs"`
+	RecentErrors   []source.LogRecord `json:"recent_errors"` // nil when Blackbox can't be read
 }
 
 // Inputs are the sources' answers for one Overview. A nil pointer is a
@@ -181,12 +187,11 @@ type Inputs struct {
 	Current      *source.SonarHistory // the last hour, for current readings
 	History      *source.SonarHistory // the chosen range
 	Day          *source.SonarHistory // the last 24 hours, for failed deploys
-	Errors24h    *source.ErrorWindow
+	RecentErrors []source.LogRecord
+	ErrorsKnown  bool
 	Gaps24h      []source.LogGap
 	GapsKnown    bool
 	Blackbox     *source.BlackboxStatus
-	Probes       []source.Probe
-	ProbesKnown  bool
 	SourceStates []source.Status
 }
 
@@ -200,7 +205,6 @@ func BuildOverview(in Inputs) Overview {
 	}
 
 	sonarCurrent := in.Status != nil && in.StatusState.State == source.OK
-	errorsBy := countErrors(in.Errors24h)
 	lastDeploy := map[string]Deploy{}
 	if in.Day != nil {
 		for _, u := range in.Day.Updates {
@@ -211,7 +215,7 @@ func BuildOverview(in Inputs) Overview {
 		for _, p := range in.Status.Projects {
 			row := Project{
 				Name:           p.Project,
-				Infrastructure: infrastructure[p.Project],
+				Infrastructure: isInfrastructure(p.Project),
 				State:          fromSonar(p.State),
 				Version:        p.Version,
 				Monitoring:     monitoring(p.Evidence),
@@ -222,10 +226,6 @@ func BuildOverview(in Inputs) Overview {
 			}
 			if !sonarCurrent {
 				row.LastKnown, row.State = row.State, Unknown
-			}
-			if in.Errors24h != nil {
-				c := errorsBy[p.Project]
-				row.Errors24h = &Count{N: c, AtLeast: in.Errors24h.Truncated}
 			}
 			if d, ok := lastDeploy[p.Project]; ok {
 				row.LastDeploy = &d
@@ -257,13 +257,19 @@ func BuildOverview(in Inputs) Overview {
 	}
 
 	o.Host = buildHost(in)
-	o.Infrastructure = buildInfra(in)
+	o.Infrastructure = buildInfra(o.Projects)
+	if in.ErrorsKnown {
+		o.RecentErrors = in.RecentErrors
+		if o.RecentErrors == nil {
+			o.RecentErrors = []source.LogRecord{}
+		}
+	}
 	if in.Blackbox != nil {
 		b := in.Blackbox
 		o.Logs = &LogsSummary{StoredBytes: b.StoredBytes, MaxBytes: b.MaxBytes, Oldest: b.Oldest, LagSeconds: b.LagSeconds,
 			StreamsOpen: b.StreamsOpen, StreamsRefused: b.StreamsRefused, Gaps24h: b.Gaps24h, Version: b.Version}
 	}
-	o.Spark = buildSpark(in, o.Projects, o.Infrastructure)
+	o.Spark = buildSpark(in)
 	o.Attention = buildAttention(in, o)
 	return o
 }
@@ -288,26 +294,6 @@ func stateRank(h Health) int {
 		return 3
 	}
 	return 4
-}
-
-// countErrors counts error lines by project. Lines without a project count
-// under their container's name.
-func countErrors(w *source.ErrorWindow) map[string]int {
-	out := map[string]int{}
-	if w == nil {
-		return out
-	}
-	for _, r := range w.Records {
-		out[recordProject(r)]++
-	}
-	return out
-}
-
-func recordProject(r source.LogRecord) string {
-	if r.Project != nil && *r.Project != "" {
-		return *r.Project
-	}
-	return r.Container
 }
 
 func buildHost(in Inputs) Host {
@@ -335,47 +321,35 @@ func buildHost(in Inputs) Host {
 	return h
 }
 
-func buildInfra(in Inputs) []Infra {
-	out := []Infra{}
-	for _, p := range in.Probes {
-		i := Infra{ID: p.ID, Name: p.Name, Version: p.Result.Version, Detail: p.Result.Detail, State: Healthy}
-		if !p.Result.Healthy {
-			i.State = Down
-		}
-		if !in.ProbesKnown {
-			i.State = Unknown
+// buildInfra lists every infrastructure project with the state Sonar
+// reports for it, or as not reported.
+func buildInfra(projects []Project) []Infra {
+	byName := map[string]Project{}
+	for _, p := range projects {
+		byName[p.Name] = p
+	}
+	out := make([]Infra, 0, len(infrastructure))
+	for _, name := range infrastructure {
+		i := Infra{Name: name, State: Unknown}
+		if p, ok := byName[name]; ok {
+			i.State, i.Version, i.Reported = p.State, p.Version, true
 		}
 		out = append(out, i)
 	}
 	return out
 }
 
-func buildSpark(in Inputs, projects []Project, infra []Infra) Spark {
-	s := Spark{State: Healthy, Reasons: []string{}}
+// buildSpark says why Spark's own state isn't known: Sonar reports projects,
+// not the server's conditions, and Vista doesn't guess them.
+func buildSpark(in Inputs) Spark {
+	s := Spark{State: Unknown, Reasons: []string{}}
 	switch {
 	case in.Status == nil || in.StatusState.State != source.OK:
-		s.State = Unknown
-		s.Reasons = append(s.Reasons, "Sonar can't be read, so Spark's state isn't known.")
+		s.Reasons = append(s.Reasons, "Sonar can't be read.")
 	case !in.Status.Fresh:
-		s.State = Unknown
 		s.Reasons = append(s.Reasons, "Sonar's measurements are out of date: its agent may be stopped.")
 	}
-	for _, i := range infra {
-		if i.State == Down {
-			s.Reasons = append(s.Reasons, fmt.Sprintf("%s's health check failed (%s).", i.Name, i.Detail))
-			if s.State == Healthy {
-				s.State = Degraded
-			}
-		}
-	}
-	for _, p := range projects {
-		if p.Infrastructure && (p.State == Down || p.State == Degraded) {
-			s.Reasons = append(s.Reasons, fmt.Sprintf("%s is %s.", p.Name, p.State))
-			if s.State == Healthy {
-				s.State = Degraded
-			}
-		}
-	}
+	s.Reasons = append(s.Reasons, "Sonar doesn't report the server's own conditions yet.")
 	return s
 }
 
@@ -405,11 +379,6 @@ func buildAttention(in Inputs, o Overview) []Attention {
 				Detail: "Sonar has no current measurement for it.", Source: "Sonar", Link: link})
 		}
 	}
-	for _, i := range o.Infrastructure {
-		if i.State == Down {
-			add(Attention{Level: "degraded", Title: i.Name + "'s health check failed", Detail: i.Detail, Source: "Vista", Link: "#/spark"})
-		}
-	}
 	if in.Day != nil {
 		for _, u := range in.Day.Updates {
 			if u.Outcome == "ok" {
@@ -428,16 +397,6 @@ func buildAttention(in Inputs, o Overview) []Attention {
 	if in.GapsKnown && len(in.Gaps24h) > 0 {
 		add(Attention{Level: "info", Title: plural(len(in.Gaps24h), "possible log gap", "possible log gaps") + " in the last 24 hours",
 			Detail: "Lines may be missing while these lasted.", Source: "Blackbox", Link: "#/activity?kind=log_gap"})
-	}
-	for _, p := range o.Projects {
-		if p.Errors24h != nil && p.Errors24h.N > 0 {
-			n := plural(p.Errors24h.N, "error line", "error lines")
-			if p.Errors24h.AtLeast {
-				n = "At least " + n
-			}
-			add(Attention{Level: "info", Project: p.Name, Title: n + " from " + p.Name + " in 24 hours", Source: "Blackbox",
-				Link: "#/logs?project=" + p.Name + "&level=error&range=24h"})
-		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return levelRank[out[i].Level] < levelRank[out[j].Level] })
 	if out == nil {

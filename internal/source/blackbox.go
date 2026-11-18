@@ -74,19 +74,8 @@ type BlackboxStatus struct {
 	Attention      []string   `json:"attention"`
 }
 
-// ErrorWindow is the newest error lines in a window. Truncated means there
-// were more than Limit, so counts are a lower bound.
-type ErrorWindow struct {
-	From      time.Time   `json:"from"`
-	To        time.Time   `json:"to"`
-	Records   []LogRecord `json:"records"`
-	Truncated bool        `json:"truncated"`
-	Limit     int         `json:"limit"`
-}
-
-// errorLimit is how many error lines Vista reads for a window: Blackbox's
-// largest page.
-const errorLimit = 1000
+// RecentErrors is how many of the newest error lines Vista shows.
+const RecentErrors = 10
 
 func blackboxStatus(c *apiClient) func(context.Context) (BlackboxStatus, error) {
 	return func(ctx context.Context) (BlackboxStatus, error) {
@@ -106,19 +95,17 @@ func blackboxSources(c *apiClient) func(context.Context) ([]LogSource, error) {
 	}
 }
 
-func blackboxErrors(c *apiClient, window time.Duration) func(context.Context) (ErrorWindow, error) {
-	return func(ctx context.Context) (ErrorWindow, error) {
+func blackboxRecentErrors(c *apiClient) func(context.Context) ([]LogRecord, error) {
+	return func(ctx context.Context) ([]LogRecord, error) {
 		to := time.Now().UTC()
-		w := ErrorWindow{From: to.Add(-window), To: to, Limit: errorLimit}
 		var page LogPage
 		err := c.getJSON(ctx, "/v1/logs", url.Values{
 			"level": {"error"},
-			"from":  {w.From.Format(time.RFC3339)},
+			"from":  {to.Add(-24 * time.Hour).Format(time.RFC3339)},
 			"to":    {to.Format(time.RFC3339)},
-			"limit": {strconv.Itoa(errorLimit)},
+			"limit": {strconv.Itoa(RecentErrors)},
 		}, &page)
-		w.Records, w.Truncated = page.Records, page.NextCursor != nil
-		return w, err
+		return page.Records, err
 	}
 }
 
