@@ -39,7 +39,7 @@ VISTA_LIGHTHOUSE_URL=http://localhost:2599 VISTA_LIGHTHOUSE_TOKEN=dev \
 go run ./cmd/vista serve
 ```
 
-Open <http://localhost:3000>. `go run ./cmd/vista health` exits 0 while it's up, and `go run ./cmd/vista help` lists the other commands.
+Open <http://localhost:3010>. `go run ./cmd/vista health` exits 0 while it's up, and `go run ./cmd/vista help` lists the other commands.
 
 With `APP_ENV=dev` and no Cloudflare Access settings, Vista lets every request through and logs a warning. With `APP_ENV=prod` it refuses to start without them.
 
@@ -50,7 +50,7 @@ Everything is read from the environment.
 | Variable | Default | Meaning |
 |---|---|---|
 | `APP_ENV` | `prod` | `prod`, or `dev` for readable logs and an optional sign-in check |
-| `VISTA_ADDR` | `:3000` | Address to listen on |
+| `VISTA_ADDR` | `:3010` | Address to listen on |
 | `VISTA_VERSION` | `dev` | Version it reports |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `VISTA_ACCESS_TEAM` | | Cloudflare Access team name, the part before `.cloudflareaccess.com` |
@@ -59,7 +59,7 @@ Everything is read from the environment.
 | `VISTA_SONAR_TOKEN` | | Vista's bearer token for Sonar |
 | `VISTA_BLACKBOX_URL` | | Blackbox's API, such as `http://blackbox-api:3190` |
 | `VISTA_BLACKBOX_TOKEN` | | Vista's bearer token for Blackbox |
-| `VISTA_LIGHTHOUSE_URL` | | Lighthouse's read-only API, such as `http://lighthouse-api:2300` |
+| `VISTA_LIGHTHOUSE_URL` | | Lighthouse's read-only API, such as `http://lighthouse-api:4000` |
 | `VISTA_LIGHTHOUSE_TOKEN` | | Vista's bearer token for Lighthouse |
 
 A source without its address and token is shown as not connected; Vista still starts.

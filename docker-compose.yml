@@ -14,13 +14,13 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 128m
-    expose: ["3000"]                             # on the spark network only, never published
+    expose: ["3010"]                             # on the spark network only, never published
     labels:
       com.mobasity.public-url: https://vista.mobasity.com   # behind Cloudflare Access
     environment:
       - APP_ENV=prod
       - VISTA_VERSION=${LIGHTHOUSE_DEPLOY_VERSION:-dev}
-      - VISTA_ADDR=:3000
+      - VISTA_ADDR=:3010
       - LOG_LEVEL=info
       # Cloudflare Access: the team name and the application's audience tag
       - VISTA_ACCESS_TEAM=${SHARED_CLOUDFLARE_TEAM_ID}

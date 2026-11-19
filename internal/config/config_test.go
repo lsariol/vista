@@ -23,7 +23,7 @@ func TestDevMayRunWithoutAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.AccessEnabled() || c.Addr != ":3000" || c.Version != "dev" {
+	if c.AccessEnabled() || c.Addr != ":3010" || c.Version != "dev" {
 		t.Errorf("%+v", c)
 	}
 }

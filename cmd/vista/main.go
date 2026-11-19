@@ -149,12 +149,12 @@ func runHealth(args []string) int {
 	return 0
 }
 
-// addr is the listen address, VISTA_ADDR or :3000.
+// addr is the listen address, VISTA_ADDR or :3010.
 func addr() string {
 	if a := os.Getenv("VISTA_ADDR"); a != "" {
 		return a
 	}
-	return ":3000"
+	return ":3010"
 }
 
 // version is the deployed release, from VISTA_VERSION.

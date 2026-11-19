@@ -43,7 +43,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	c := Config{
 		Env:             get("APP_ENV", "prod"),
-		Addr:            get("VISTA_ADDR", ":3000"),
+		Addr:            get("VISTA_ADDR", ":3010"),
 		Version:         get("VISTA_VERSION", "dev"),
 		AccessTeam:      strings.ToLower(get("VISTA_ACCESS_TEAM", "")),
 		AccessAUD:       get("VISTA_ACCESS_AUD", ""),
