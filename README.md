@@ -89,7 +89,7 @@ The dashboard is plain HTML, CSS and JavaScript in `internal/web/static`, built 
 
 ## Deployment
 
-`docker-compose.yml` is written for [Lighthouse](https://github.com/lsariol/lighthouse), which deploys each version tag. It expects an external Docker network named `spark`, on which Sonar and Blackbox answer, and reads its tokens and Access settings from the environment. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+`docker-compose.yml` is written for [Lighthouse](https://github.com/lsariol/lighthouse), which deploys each version tag. It expects an external Docker network named `spark`, on which Sonar, Blackbox and Lighthouse answer, and reads its tokens and Access settings from the environment. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
