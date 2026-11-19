@@ -17,5 +17,5 @@ RUN CGO_ENABLED=1 go test -race -count=1 ./...
 FROM alpine:3.24
 COPY --from=builder /app/vista /vista
 USER 10001:10001
-EXPOSE 3000
+EXPOSE 3010
 CMD ["/vista", "serve"]
