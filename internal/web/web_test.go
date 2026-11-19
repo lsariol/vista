@@ -44,8 +44,35 @@ func fakeSources(t *testing.T) (*httptest.Server, *[]string) {
 				"steps":[{"step":"test","status":"failed","started_at":"2026-11-18T11:01:00Z","finished_at":"2026-11-18T11:02:00Z","log":"FAIL"}]}`)
 		case "/v1/releases":
 			io.WriteString(w, `{"releases":[{"tag":"v1.1.0","sha":"abcdef0123","status":"waiting","created_at":"2026-11-18T10:00:00Z"}]}`)
-		case "/v1/status/history":
-			io.WriteString(w, `{"range":"1h","bucket_seconds":60,"points":[{"t":"2026-11-18T11:59:00Z","cpu_pct":{"avg":10,"min":5,"max":20},"mem_used_pct":null,"coverage_pct":100}],"updates":[]}`)
+		case "/v1/monitor/host":
+			io.WriteString(w, `{"range":"1h","bucket_seconds":60,"now":{"read_at":"2026-11-18T11:59:30Z","cpu_pct":10,"core_pcts":[9,11],"memory_total":1000,"memory_used":400,"memory_used_pct":40,
+				"load1":0.5,"load5":0.4,"load15":0.3,"uptime_seconds":3600,"disk":{"total":100,"used":89,"available":11,"used_pct":89},"network":[{"interface":"eth0","rx_bytes_per_s":2000,"tx_bytes_per_s":500}]},
+				"points":[{"t":"2026-11-18T11:59:00Z","cpu_pct":{"avg":10,"min":5,"max":20},"mem_used_pct":null,"coverage_pct":100,"disk_used_bytes":89}],
+				"network":[{"interface":"eth0","points":[{"t":"2026-11-18T11:59:00Z","minutes":1,"rx_bytes":120000,"tx_bytes":30000}]}],"updates":[]}`)
+		case "/v1/monitor/projects":
+			io.WriteString(w, `{"fresh":true,"projects":[{"project":"lys","group":"app","state":"operational","state_since":"2026-11-18T10:00:00Z","evidence":"checked","services":[
+				{"service":"lys","state":"operational","counted":true,"usage":{"cpu_cores":0.2},"containers":[{"name":"lys","image":"lys-lys","state":"running","health":"healthy","restart_count":2,
+				"memory_limit":268435456,"usage":{"cpu_cores":0.2,"memory_bytes":104857600,"net_rx_bytes_per_s":300,"net_tx_bytes_per_s":100}}]}],"checks":[]}]}`)
+		case "/v1/monitor/conditions":
+			io.WriteString(w, `{"fresh":true,"state":"warning","conditions":[{"id":"disk","subject":null,"level":"warning","message":"The disk is 89% full","since":"2026-11-18T11:00:00Z"},
+				{"id":"project","subject":"lys","level":"warning","message":"lys is degraded","since":"2026-11-18T11:00:00Z"}],"collectors":[],"attention":[]}`)
+		case "/v1/monitor/databases":
+			io.WriteString(w, `{"now":{"max_connections":100,"connections":7,"databases":[{"name":"lys_db","project":"lys","size_bytes":5000,"connections":3,"active":1}]}}`)
+		case "/v1/monitor/disk":
+			io.WriteString(w, `{"now":{"totals":{"image_bytes":10},"projects":[{"project":"lys","data_bytes":42,"image_bytes":7}]}}`)
+		case "/v1/monitor/traffic":
+			io.WriteString(w, `{"range":"24h","hosts":[{"host":"lys.mobasity.com","project":"lys","requests":120,"errors_5xx":2,"bytes":9000,"points":[]}]}`)
+		case "/v1/monitor/apps":
+			io.WriteString(w, `{"days":30,"projects":[]}`)
+		case "/v1/monitor/states":
+			io.WriteString(w, `{"range":"24h","projects":[{"project":"lys","spans":[{"state":"down","start":"2026-11-18T09:00:00Z","end":"2026-11-18T09:20:00Z","observed_minutes":20,
+				"services":[{"service":"lys","state":"down","minutes":20}],"checks":[]},{"state":"operational","start":"2026-11-18T09:20:00Z","end":"2026-11-18T12:00:00Z","observed_minutes":160,"services":[],"checks":[]}]}]}`)
+		case "/v1/monitor/usage":
+			io.WriteString(w, `{"range":"24h","bucket_seconds":300,"services":[{"project":"lys","service":"lys","points":[{"t":"2026-11-18T11:55:00Z","minutes":5,"cpu_cores":{"avg":0.2,"max":0.4}}]}]}`)
+		case "/v1/stats/errors":
+			io.WriteString(w, `{"bucket":"hour","buckets":[{"start":"2026-11-18T11:00:00Z","project":"lys","error":4,"warn":1}],"totals":[{"project":"lys","error":4,"warn":1}]}`)
+		case "/v1/stats/errors/groups":
+			io.WriteString(w, `{"groups":[{"fingerprint":"db timeout after <n>ms","project":"lys","service":"lys","level":"error","count":4,"first_seen":"2026-11-18T11:00:00Z","last_seen":"2026-11-18T11:58:00Z","newest_id":5,"newest_message":"db timeout after 30ms"}],"total_groups":1}`)
 		case "/v1/logs":
 			io.WriteString(w, `{"records":[{"id":5,"ts":"2026-11-18T11:58:00Z","project":"lys","service":"lys","container":"lys","stream":"stderr","level":"error","message":"<script>alert(1)</script>","attrs":null}],"next_cursor":null,"unknown_left_out":0}`)
 		case "/v1/logs/5/context":
@@ -148,9 +175,23 @@ func TestOverviewWithSources(t *testing.T) {
 		}
 		Host struct {
 			CPU *struct{ Pct float64 }
+			Now *struct {
+				Load1 float64
+			}
+			Network []struct{ Interface string }
 		}
 		RecentErrors []struct{ ID int64 } `json:"recent_errors"`
 		Attention    []struct{ Title string }
+		Containers   []struct {
+			Project, Service, Name string
+			RestartCount           int `json:"restart_count"`
+		}
+		Errors *struct {
+			Totals []struct{ Error int64 }
+			Groups []struct{ Count int64 }
+		}
+		Disk      *struct{}
+		Databases *struct{ Connections int }
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &o); err != nil {
 		t.Fatal(err)
@@ -164,15 +205,30 @@ func TestOverviewWithSources(t *testing.T) {
 	if o.Host.CPU == nil || o.Host.CPU.Pct != 10 {
 		t.Errorf("cpu = %+v", o.Host.CPU)
 	}
-	if o.Spark.State != "unknown" { // Sonar doesn't report the server's conditions yet
+	if o.Spark.State != "degraded" { // Sonar's conditions say warning
 		t.Errorf("spark = %s", o.Spark.State)
+	}
+	if o.Host.Now == nil || o.Host.Now.Load1 != 0.5 || len(o.Host.Network) != 1 {
+		t.Errorf("host now = %+v, network = %+v", o.Host.Now, o.Host.Network)
+	}
+	if len(o.Containers) != 1 || o.Containers[0].Project != "lys" || o.Containers[0].RestartCount != 2 {
+		t.Errorf("containers = %+v", o.Containers)
+	}
+	if o.Errors == nil || len(o.Errors.Totals) != 1 || o.Errors.Totals[0].Error != 4 || len(o.Errors.Groups) != 1 {
+		t.Errorf("errors = %+v", o.Errors)
+	}
+	if o.Disk == nil || o.Databases == nil || o.Databases.Connections != 7 {
+		t.Errorf("disk = %v, databases = %+v", o.Disk, o.Databases)
 	}
 	var titles []string
 	for _, a := range o.Attention {
 		titles = append(titles, a.Title)
 	}
 	joined := strings.Join(titles, " | ")
-	for _, want := range []string{"Deploy of lys failed", "Lighthouse reports lys as broken"} {
+	if strings.Contains(joined, "lys is degraded") {
+		t.Errorf("a project condition is listed twice: %q", joined)
+	}
+	for _, want := range []string{"Deploy of lys failed", "Lighthouse reports lys as broken", "The disk is 89% full"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("attention %q lacks %q", joined, want)
 		}
@@ -201,6 +257,32 @@ func TestLighthouseDeployAndReleases(t *testing.T) {
 	rec = get(h, "/api/v1/activity?range=24h")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"deploy_id":7`) || !strings.Contains(rec.Body.String(), "Lighthouse's records") {
 		t.Errorf("activity: %d %s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"kind":"state"`) || !strings.Contains(body, `"title":"lys down"`) || !strings.Contains(body, `"bucket":"hour"`) {
+		t.Errorf("activity lacks the state change or error counts: %s", body)
+	}
+}
+
+func TestIncidentsAndUsage(t *testing.T) {
+	h, seen := newTestHandler(t, true)
+	rec := get(h, "/api/v1/incidents")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"incidents":[{"project":"lys","state":"down"`) {
+		t.Errorf("incidents: %d %s", rec.Code, rec.Body)
+	}
+	rec = get(h, "/api/v1/projects/lys/usage?range=24h")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"service":"lys"`) {
+		t.Errorf("usage: %d %s", rec.Code, rec.Body)
+	}
+	last := (*seen)[len(*seen)-1]
+	if !strings.Contains(last, "/v1/monitor/usage?") || !strings.Contains(last, "project=lys") || !strings.Contains(last, "range=24h") {
+		t.Errorf("forwarded %s", last)
+	}
+	if rec := get(h, "/api/v1/projects/lys/usage?range=2h"); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad range: %d", rec.Code)
+	}
+	h, _ = newTestHandler(t, false)
+	if rec := get(h, "/api/v1/projects/lys/usage"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("usage without Sonar: %d", rec.Code)
 	}
 }
 

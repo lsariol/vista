@@ -13,7 +13,7 @@ import (
 type Event struct {
 	At       time.Time  `json:"at"`
 	End      *time.Time `json:"end,omitempty"`
-	Kind     string     `json:"kind"` // deploy, deploy_failed, log_gap
+	Kind     string     `json:"kind"` // deploy, deploy_failed, state, log_gap
 	Project  string     `json:"project,omitempty"`
 	Title    string     `json:"title"`
 	Detail   string     `json:"detail,omitempty"`
@@ -29,6 +29,7 @@ type Activity struct {
 	Range       string          `json:"range"`
 	Events      []Event         `json:"events"`
 	Projects    []string        `json:"projects"` // every project with an event, for the filter
+	Errors      *Errors         `json:"errors"`   // nil when Blackbox can't be read
 	Notes       []string        `json:"notes"`
 	Sources     []source.Status `json:"sources"`
 }
@@ -37,10 +38,12 @@ type Activity struct {
 type ActivityInputs struct {
 	Now          time.Time
 	Range        string
-	History      *source.SonarHistory
+	History      *source.SonarHost
 	Deploys      []source.LighthouseDeployment
 	DeploysKnown bool
 	Gaps         []source.LogGap
+	States       *source.SonarStates
+	ErrorCounts  *source.ErrorCounts
 	SourceStates []source.Status
 }
 
@@ -48,8 +51,8 @@ type ActivityInputs struct {
 func BuildActivity(in ActivityInputs) Activity {
 	a := Activity{GeneratedAt: in.Now.UTC(), Range: in.Range, Events: []Event{}, Sources: mergeSources(in.SourceStates),
 		Notes: []string{
-			"Health changes and container restarts aren't listed: Sonar doesn't serve them yet.",
-			"Errors per project and hour aren't listed: Blackbox doesn't serve error counts yet. The Logs page shows every error line.",
+			"Health changes are Sonar's: each stretch a project was down or degraded, with what wasn't up.",
+			"Error counts are Blackbox's warn and error lines. Container restarts are counted on each container, on the Overview.",
 			"Events close together are leads to investigate, not proof that one caused the other.",
 		}}
 
@@ -77,6 +80,21 @@ func BuildActivity(in ActivityInputs) Activity {
 		a.Events = append(a.Events, e)
 	}
 
+	a.Errors = buildErrors(in.ErrorCounts, nil)
+	if in.States != nil {
+		for _, p := range in.States.Projects {
+			for _, sp := range p.Spans {
+				if sp.State != "down" && sp.State != "degraded" {
+					continue
+				}
+				end := sp.End
+				a.Events = append(a.Events, Event{At: sp.Start, End: &end, Kind: "state", Project: p.Project,
+					Title: p.Project + " " + sp.State, Detail: spanDetail(sp), Source: "Sonar",
+					Link: "#/logs?project=" + p.Project + "&from=" + sp.Start.Add(-5*time.Minute).Format(time.RFC3339) + "&to=" + sp.End.Add(5*time.Minute).Format(time.RFC3339)})
+			}
+		}
+	}
+
 	for _, g := range in.Gaps {
 		e := Event{At: g.From, Kind: "log_gap", Title: "Possible log gap: " + gapKind(g.Kind), Detail: g.Detail, Source: "Blackbox"}
 		if g.Container != nil {
@@ -99,6 +117,34 @@ func BuildActivity(in ActivityInputs) Activity {
 	}
 	sort.Strings(a.Projects)
 	return a
+}
+
+// spanDetail says how long a span lasted and what wasn't up during it.
+func spanDetail(sp source.StateSpan) string {
+	parts := []string{"For " + minutes(int(sp.End.Sub(sp.Start).Minutes())) + "."}
+	for _, c := range sp.Services {
+		parts = append(parts, fmt.Sprintf("Service %s %s for %s.", c.Service, c.State, minutes(c.Minutes)))
+	}
+	for _, c := range sp.Checks {
+		t := fmt.Sprintf("Check of %s: %d failed, %d slow", c.URL, c.Failures, c.Slow)
+		if c.LastError != nil && *c.LastError != "" {
+			t += ", last error: " + clip(*c.LastError, 160)
+		}
+		parts = append(parts, strings.TrimSuffix(t, ".")+".")
+	}
+	return strings.Join(parts, " ")
+}
+
+func minutes(m int) string {
+	switch {
+	case m < 1:
+		return "under a minute"
+	case m < 90:
+		return plural(m, "minute", "minutes")
+	case m < 48*60:
+		return fmt.Sprintf("%.1f hours", float64(m)/60)
+	}
+	return fmt.Sprintf("%.1f days", float64(m)/1440)
 }
 
 func gapKind(k string) string {
@@ -125,6 +171,15 @@ type IncidentDay struct {
 	UptimePct       *float64 `json:"uptime_pct"`
 }
 
+// Incident is one stretch a project was down or degraded, from Sonar's spans.
+type Incident struct {
+	Project string    `json:"project"`
+	State   Health    `json:"state"`
+	Start   time.Time `json:"start"`
+	End     time.Time `json:"end"`
+	Detail  string    `json:"detail"`
+}
+
 // Availability is one project's uptime.
 type Availability struct {
 	Project    string        `json:"project"`
@@ -136,6 +191,7 @@ type Availability struct {
 // Incidents is the Incidents page.
 type Incidents struct {
 	GeneratedAt  time.Time       `json:"generated_at"`
+	Incidents    []Incident      `json:"incidents"` // nil when Sonar's spans can't be read
 	Days         []IncidentDay   `json:"days"`
 	Availability []Availability  `json:"availability"`
 	Overall      *source.Uptime  `json:"overall_30d"`
@@ -144,12 +200,23 @@ type Incidents struct {
 }
 
 // BuildIncidents lists the days with downtime or degradation, newest first.
-func BuildIncidents(now time.Time, st *source.SonarStatus, states []source.Status) Incidents {
+func BuildIncidents(now time.Time, st *source.SonarStatus, spans *source.SonarStates, states []source.Status) Incidents {
 	inc := Incidents{GeneratedAt: now.UTC(), Days: []IncidentDay{}, Availability: []Availability{}, Sources: mergeSources(states),
 		Notes: []string{
-			"Incidents are whole UTC days from Sonar's history: it doesn't serve when each one began and ended yet.",
+			"Incidents are Sonar's state changes over 30 days, with when each began and ended; days with trouble go back 90 days.",
 			"Degraded and deploy minutes count as available. Unobserved time is left out of uptime and shown as coverage instead.",
 		}}
+	if spans != nil {
+		inc.Incidents = []Incident{}
+		for _, p := range spans.Projects {
+			for _, sp := range p.Spans {
+				if sp.State == "down" || sp.State == "degraded" {
+					inc.Incidents = append(inc.Incidents, Incident{Project: p.Project, State: fromSonar(sp.State), Start: sp.Start, End: sp.End, Detail: spanDetail(sp)})
+				}
+			}
+		}
+		sort.SliceStable(inc.Incidents, func(i, j int) bool { return inc.Incidents[i].Start.After(inc.Incidents[j].Start) })
+	}
 	if st == nil {
 		return inc
 	}

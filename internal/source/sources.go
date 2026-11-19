@@ -15,15 +15,25 @@ import (
 // only when a page does; it collects nothing on its own.
 type Set struct {
 	SonarStatus    *Cached[SonarStatus]
-	SonarHistory   map[string]*Cached[SonarHistory] // by range
+	SonarHost      map[string]*Cached[SonarHost] // by range
+	SonarProjects  *Cached[SonarProjects]
+	Conditions     *Cached[SonarConditions]
+	Databases      *Cached[SonarDatabases]
+	Disk           *Cached[SonarDisk]
+	Apps           *Cached[SonarApps]
+	States         map[string]*Cached[SonarStates]  // by range
+	Traffic        map[string]*Cached[SonarTraffic] // by TrafficRange
 	BlackboxStatus *Cached[BlackboxStatus]
 	LogSources     *Cached[[]LogSource]
-	RecentErrors   *Cached[[]LogRecord]         // the newest error lines, last 24 hours
-	Gaps           map[string]*Cached[[]LogGap] // by range
+	RecentErrors   *Cached[[]LogRecord]            // the newest error lines, last 24 hours
+	Gaps           map[string]*Cached[[]LogGap]    // by range
+	ErrorCounts    map[string]*Cached[ErrorCounts] // by range
+	ErrorGroups    map[string]*Cached[ErrorGroups] // by range
 
 	LighthouseProjects *Cached[[]LighthouseProject]
 	Deployments        map[string]*Cached[[]LighthouseDeployment] // by range
 
+	sonar      *apiClient // nil when Sonar isn't connected
 	blackbox   *apiClient // nil when Blackbox isn't connected
 	lighthouse *apiClient // nil when Lighthouse isn't connected
 }
@@ -38,24 +48,38 @@ const (
 // NewSet builds the sources the configuration connects.
 func NewSet(cfg config.Config, log *slog.Logger) *Set {
 	s := &Set{
-		SonarHistory: map[string]*Cached[SonarHistory]{},
-		Gaps:         map[string]*Cached[[]LogGap]{},
-		Deployments:  map[string]*Cached[[]LighthouseDeployment]{},
+		SonarHost:   map[string]*Cached[SonarHost]{},
+		States:      map[string]*Cached[SonarStates]{},
+		Traffic:     map[string]*Cached[SonarTraffic]{},
+		Gaps:        map[string]*Cached[[]LogGap]{},
+		ErrorCounts: map[string]*Cached[ErrorCounts]{},
+		ErrorGroups: map[string]*Cached[ErrorGroups]{},
+		Deployments: map[string]*Cached[[]LighthouseDeployment]{},
 	}
 
-	var sonar *apiClient
 	if cfg.SonarURL != "" && cfg.SonarToken != "" {
-		sonar = newAPIClient("Sonar", cfg.SonarURL, cfg.SonarToken, SonarTokenKey)
+		s.sonar = newAPIClient("Sonar", cfg.SonarURL, cfg.SonarToken, SonarTokenKey)
 	}
+	sonar := s.sonar
 	sonarMissing := "Set VISTA_SONAR_URL and VISTA_SONAR_TOKEN (Cove key " + SonarTokenKey + ")."
 	s.SonarStatus = NewCached("sonar", "Sonar", 10*time.Second, fetchOrNil(sonar, sonarStatus), sonarMissing, log)
 	for _, r := range Ranges {
-		var fetch func(context.Context) (SonarHistory, error)
+		var fetch func(context.Context) (SonarHost, error)
 		if sonar != nil {
-			fetch = sonarHistory(sonar, r)
+			fetch = sonarHost(sonar, r)
 		}
-		s.SonarHistory[r] = NewCached("sonar", "Sonar", 30*time.Second, fetch, sonarMissing, log)
+		s.SonarHost[r] = NewCached("sonar", "Sonar", 30*time.Second, fetch, sonarMissing, log)
+		s.States[r] = NewCached("sonar", "Sonar", 30*time.Second, fetchOrNil(sonar, sonarStates(r)), sonarMissing, log)
+		tr := TrafficRange(r)
+		if s.Traffic[tr] == nil {
+			s.Traffic[tr] = NewCached("sonar", "Sonar", 5*time.Minute, fetchOrNil(sonar, sonarTraffic(tr)), sonarMissing, log)
+		}
 	}
+	s.SonarProjects = NewCached("sonar", "Sonar", 10*time.Second, fetchOrNil(sonar, sonarProjects), sonarMissing, log)
+	s.Conditions = NewCached("sonar", "Sonar", 10*time.Second, fetchOrNil(sonar, sonarConditions), sonarMissing, log)
+	s.Databases = NewCached("sonar", "Sonar", 30*time.Second, fetchOrNil(sonar, sonarDatabases), sonarMissing, log)
+	s.Disk = NewCached("sonar", "Sonar", 5*time.Minute, fetchOrNil(sonar, sonarDisk), sonarMissing, log)
+	s.Apps = NewCached("sonar", "Sonar", time.Minute, fetchOrNil(sonar, sonarApps), sonarMissing, log)
 
 	if cfg.BlackboxURL != "" && cfg.BlackboxToken != "" {
 		s.blackbox = newAPIClient("Blackbox", cfg.BlackboxURL, cfg.BlackboxToken, BlackboxTokenKey)
@@ -71,6 +95,8 @@ func NewSet(cfg config.Config, log *slog.Logger) *Set {
 			gaps = blackboxGaps(s.blackbox, d)
 		}
 		s.Gaps[r] = NewCached("blackbox", "Blackbox", time.Minute, gaps, bbMissing, log)
+		s.ErrorCounts[r] = NewCached("blackbox", "Blackbox", time.Minute, fetchOrNil(s.blackbox, blackboxErrorCounts(d)), bbMissing, log)
+		s.ErrorGroups[r] = NewCached("blackbox", "Blackbox", time.Minute, fetchOrNil(s.blackbox, blackboxErrorGroups(d)), bbMissing, log)
 	}
 
 	if cfg.LighthouseURL != "" && cfg.LighthouseToken != "" {
@@ -105,6 +131,21 @@ var ErrLogsNotConnected = errors.New("Blackbox isn't connected: set VISTA_BLACKB
 
 // ErrLighthouseNotConnected means Vista has no Lighthouse token.
 var ErrLighthouseNotConnected = errors.New("Lighthouse isn't connected: set VISTA_LIGHTHOUSE_URL and VISTA_LIGHTHOUSE_TOKEN (Cove key " + LighthouseTokenKey + ")")
+
+// ErrSonarNotConnected means Vista has no Sonar token.
+var ErrSonarNotConnected = errors.New("Sonar isn't connected: set VISTA_SONAR_URL and VISTA_SONAR_TOKEN (Cove key " + SonarTokenKey + ")")
+
+// Usage returns one project's resource use over a range, uncached.
+func (s *Set) Usage(ctx context.Context, project, r string) (SonarUsage, error) {
+	if s.sonar == nil {
+		return SonarUsage{}, ErrSonarNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var u SonarUsage
+	err := s.sonar.getJSON(ctx, "/v1/monitor/usage", url.Values{"range": {r}, "project": {project}}, &u)
+	return u, err
+}
 
 // Deployment returns one deploy with its steps, uncached.
 func (s *Set) Deployment(ctx context.Context, id int64) (LighthouseDeploymentDetail, error) {
