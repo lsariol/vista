@@ -17,6 +17,7 @@ services:
     expose: ["3010"]                             # on the spark network only, never published
     labels:
       com.mobasity.public-url: https://vista.mobasity.com   # behind Cloudflare Access
+      com.mobasity.check-path: /healthz                     # answers without the Access sign-in
     environment:
       - APP_ENV=prod
       - VISTA_VERSION=${LIGHTHOUSE_DEPLOY_VERSION:-dev}
@@ -30,6 +31,8 @@ services:
       - VISTA_SONAR_TOKEN=${SHARED_SONAR_VISTA_TOKEN}
       - VISTA_BLACKBOX_URL=http://blackbox-api:3190
       - VISTA_BLACKBOX_TOKEN=${SHARED_BLACKBOX_VISTA_TOKEN}
+      - VISTA_LIGHTHOUSE_URL=http://lighthouse-api:4000
+      - VISTA_LIGHTHOUSE_TOKEN=${SHARED_LIGHTHOUSE_VISTA_TOKEN}
     healthcheck:
       test: ["CMD", "/vista", "health"]
       interval: 10s
