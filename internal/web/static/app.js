@@ -20,6 +20,39 @@
     add(el, kids);
     return el;
   }
+  // Line icons, drawn on a 24-unit grid with the text color.
+  const ICONS = {
+    home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
+    box: 'M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8',
+    server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01M12 7h4M12 17h4',
+    pulse: 'M3 12h4l3-8 4 16 3-8h4',
+    logs: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',
+    alert: 'M12 3 2 20h20zM12 10v4M12 17h.01',
+    bell: 'M6 9a6 6 0 1 1 12 0c0 6 3 8 3 8H3s3-2 3-8M10.3 21a2 2 0 0 0 3.4 0',
+    layers: 'M12 3 2 8l10 5 10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5',
+    cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3',
+    memory: 'M3 7h18v9H3zM7 10v3M11 10v3M15 10v3M6 16v3M10 16v3M14 16v3M18 16v3',
+    disk: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+    network: 'M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4',
+    chart: 'M3 3v18h18M7 15l4-5 3 3 5-7',
+    deploy: 'M12 16V4M7 9l5-5 5 5M4 20h16',
+    errors: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16h.01',
+    pie: 'M12 3a9 9 0 1 0 9 9h-9zM15 2.5A9 9 0 0 1 21.5 9H15z',
+    gauge: 'M12 14l4-4M3.5 18a9 9 0 1 1 17 0',
+    globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18',
+    target: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+    bars: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+    search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4',
+  };
+  function icon(name, size = 18) {
+    return s('svg', { class: 'icon', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' }, s('path', { d: ICONS[name] || ICONS.layers }));
+  }
+  // The panels name their icons with a character; this is the drawing for each.
+  const GLYPH = { '◇': 'box', '⚠': 'errors', '♧': 'bell', '〽': 'chart', '⇪': 'deploy', 'ϟ': 'server', '○': 'target', '◉': 'layers', '▤': 'logs',
+    '⌁': 'pulse', '⌖': 'target', '▥': 'bars', '⇅': 'network', '◫': 'disk', '⛁': 'disk', '◎': 'globe', '▣': 'cpu' };
+  const iconFor = (g) => h('span', { class: 'ico' }, icon(GLYPH[g] || g, 16));
+
   function setAttrs(el, attrs) {
     for (const [k, v] of Object.entries(attrs || {})) {
       if (v == null || v === false) continue;
@@ -144,18 +177,21 @@
     overview: null,
     projectFilter: '',
     projectStatus: 'all',
+    containerFilter: '',
+    containerStatus: 'all',
+    topBy: 'cpu',
     token: 0,
   };
 
   // ---------- Pages and routing ----------
   const PAGES = [
-    { id: 'overview', label: 'Overview', ico: '⌂', render: renderOverview, auto: true, sub: 'What needs attention on Spark and its projects' },
-    { id: 'projects', label: 'Projects', ico: '◇', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version and availability' },
-    { id: 'spark', label: 'Spark', ico: 'ϟ', render: renderSpark, auto: true, sub: 'The server itself: its resources and the infrastructure every project relies on' },
-    { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys, health changes, errors and log gaps on one timeline' },
-    { id: 'logs', label: 'Logs', ico: '▤', render: renderLogs, auto: false, sub: 'Search what every container wrote, kept by Blackbox' },
-    { id: 'incidents', label: 'Incidents', ico: '⚠', render: renderIncidents, auto: true, sub: 'Availability and the days projects were down or degraded' },
-    { id: 'sources', label: 'Sources', ico: '◉', render: renderSources, auto: true, sub: 'Where Vista\'s information comes from, and how fresh it is' },
+    { id: 'overview', label: 'Overview', icon: 'home', render: renderOverview, auto: true, sub: 'What needs attention on Spark and its projects' },
+    { id: 'projects', label: 'Projects', icon: 'box', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version and availability' },
+    { id: 'spark', label: 'Spark', icon: 'server', render: renderSpark, auto: true, sub: 'The server itself: its resources and the infrastructure every project relies on' },
+    { id: 'activity', label: 'Activity', icon: 'pulse', render: renderActivity, auto: true, sub: 'Deploys, health changes, errors and log gaps on one timeline' },
+    { id: 'logs', label: 'Logs', icon: 'logs', render: renderLogs, auto: false, sub: 'Search what every container wrote, kept by Blackbox' },
+    { id: 'incidents', label: 'Incidents', icon: 'bell', render: renderIncidents, auto: true, sub: 'Availability and the days projects were down or degraded' },
+    { id: 'sources', label: 'Sources', icon: 'layers', render: renderSources, auto: true, sub: 'Where Vista\'s information comes from, and how fresh it is' },
   ];
 
   function parseHash() {
@@ -172,7 +208,7 @@
 
   function buildNav() {
     $('#nav').replaceChildren(...PAGES.map((p) => h('a', { href: `#/${p.id}`, 'data-page': p.id },
-      h('span', { class: 'nav-ico', 'aria-hidden': 'true' }, p.ico),
+      h('span', { class: 'nav-ico', 'aria-hidden': 'true' }, icon(p.icon)),
       h('span', { class: 'nav-label' }, p.label),
       p.id === 'overview' ? h('span', { class: 'nav-count', id: 'navCount', hidden: true }) : null)));
   }
@@ -184,7 +220,6 @@
       if (a.dataset.page === page.id) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     });
-    $('#topTitle').textContent = page.label;
     $('#range').value = ['1h', '24h', '7d', '30d'].includes(params.get('range')) ? params.get('range') : state.range;
     document.title = page.id === 'overview' ? 'Vista' : `${page.label} · Vista`;
     const target = $('#page');
@@ -237,10 +272,34 @@
     return h('a', { href: '#/sources', class: 'pill' }, '● ', off ? `Sources answering · ${off} not connected` : 'All sources answering');
   }
 
-  function kpi(ico, title, big, small, extra) {
+  // tile is one of the Overview's stat tiles.
+  function tile(title, ico, big, small, extra, link) {
     return h('article', { class: 'card kpi' },
-      h('div', { class: 'kpi-top' }, h('span', { class: 'ico', 'aria-hidden': 'true' }, ico), title),
-      big, small ? h('div', { class: 'small' }, small) : null, extra || null);
+      h('div', { class: 'kpi-top' }, link ? h('a', { href: link }, title) : title),
+      h('div', { class: 'kpi-body' }, h('span', { class: 'kpi-ico' }, icon(ico, 30)),
+        h('div', { class: 'kpi-values' }, h('div', { class: 'big' }, big), small ? h('div', { class: 'small' }, small) : null)),
+      extra || null);
+  }
+
+  // sparkArea is a small filled trend, scaled to its own range so movement shows.
+  let sparkId = 0;
+  function sparkArea(values, color) {
+    const W = 120, H = 34;
+    const nums = values.filter(isNum);
+    let lo = Math.min(...nums), hi = Math.max(...nums);
+    const pad = Math.max((hi - lo) * 0.25, Math.abs(hi) * 0.02, 1e-9);
+    lo -= pad; hi += pad;
+    const pts = values.map((v, i) => (isNum(v) ? [i / Math.max(1, values.length - 1) * W, H - 1 - (v - lo) / (hi - lo) * (H - 3)] : null));
+    const svg = s('svg', { class: 'spark-area', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+    const id = `sg${++sparkId}`;
+    svg.append(s('defs', null, s('linearGradient', { id, x1: 0, y1: 0, x2: 0, y2: 1 },
+      s('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': 0.35 }), s('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }))));
+    for (const seg of segments(pts.map((p) => (p ? { x: p[0], y: p[1], v: 1 } : { v: null })))) {
+      const line = seg.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      svg.append(s('path', { d: `${line} L${seg[seg.length - 1].x.toFixed(1)},${H} L${seg[0].x.toFixed(1)},${H} Z`, fill: `url(#${id})` }),
+        s('path', { d: line, fill: 'none', stroke: color, 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }));
+    }
+    return svg;
   }
 
   function dayStrip(days, large) {
@@ -256,19 +315,6 @@
     if (d.updates) parts.push(plural(d.updates, 'deploy', 'deploys'));
     parts.push(`${Math.round(d.coverage_pct)}% observed`);
     return parts.join(', ');
-  }
-
-  function sparkline(values) {
-    const W = 100, H = 24;
-    const pts = values.map((v, i) => (isNum(v) ? [i / Math.max(1, values.length - 1) * W, H - 2 - (Math.min(v, 100) / 100) * (H - 4)] : null));
-    let d = '', pen = false;
-    for (const p of pts) {
-      if (!p) { pen = false; continue; }
-      d += `${pen ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)} `;
-      pen = true;
-    }
-    return s('svg', { class: 'spark-line', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' },
-      d ? s('path', { d, fill: 'none', stroke: '#27aafc', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }) : null);
   }
 
   // ---------- Charts ----------
@@ -460,7 +506,7 @@
   }
 
   const panelHead = (ico, title, extra) => h('div', { class: 'panel-head' },
-    h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, ico), title), extra || null);
+    h('div', { class: 'panel-title' }, iconFor(ico), title), extra || null);
 
   // bar is a labelled meter; pct is of the whole track.
   function meter(label, pct, value, color) {
@@ -587,56 +633,146 @@
   // ---------- Overview ----------
   async function renderOverview({ page }) {
     const o = await loadOverview();
-    const cpuVals = o.host.points.map((p) => (p.cpu_pct ? p.cpu_pct.avg : null));
-    const memVals = o.host.points.map((p) => (p.mem_used_pct ? p.mem_used_pct.avg : null));
-    const errs = o.recent_errors; // null when Blackbox can't be read
-    const t = o.totals;
+    const host = o.host, n = host.now;
+    const cores = n && n.core_pcts ? n.core_pcts.length : 0;
+    const pts = host.points;
+    const net = mainInterface(host);
+    const ctrs = o.containers;
+    const running = ctrs ? ctrs.filter((c) => c.state === 'running').length : 0;
+    const disk = n && n.disk;
+    const rx = net.now ? net.now.rx_bytes_per_s : null, tx = net.now ? net.now.tx_bytes_per_s : null;
 
-    const kpis = h('div', { class: 'grid grid-kpis' },
-      kpi('ϟ', 'Spark health', h('div', { class: `big t-${o.spark.state}` }, '● ', LABEL[o.spark.state]),
-        o.spark.reasons[0] || 'Host and core services answering'),
-      kpi('◇', 'Projects', h('div', { class: 'big' }, `${t.healthy} / ${t.total}`),
-        `healthy${t.degraded ? ` · ${t.degraded} degraded` : ''}${t.down ? ` · ${t.down} down` : ''}${t.unknown ? ` · ${t.unknown} unknown` : ''}${t.updating ? ` · ${t.updating} updating` : ''}`,
-        progress(t)),
-      kpi('▣', 'CPU', h('div', { class: 'big' }, o.host.cpu ? fmtPct(o.host.cpu.pct) : '—'),
-        o.host.cpu ? `Average at ${fmtTime(o.host.cpu.at)}` : 'Not available', sparkline(cpuVals)),
-      kpi('▥', 'Memory', h('div', { class: 'big' }, o.host.memory ? fmtPct(o.host.memory.pct) : '—'),
-        o.host.memory ? `In use at ${fmtTime(o.host.memory.at)}` : 'Not available', sparkline(memVals)),
-      kpi('⚠', 'Newest error', h('div', { class: `big ${errs && errs.length ? 'red' : ''}` }, errs ? (errs.length ? ago(errs[0].ts) : 'None') : '—'),
-        errs ? (errs.length ? `From ${errs[0].project || errs[0].container}` : 'No error lines in 24 hours') : 'Blackbox not answering'),
-      kpi('▤', 'Log storage', h('div', { class: 'big' }, o.logs ? fmtBytes(o.logs.stored_bytes) : '—'),
-        o.logs ? `of ${fmtBytes(o.logs.max_bytes)} · oldest ${ago(o.logs.oldest)}` : 'Blackbox not answering',
-        o.logs && o.logs.max_bytes ? storageBar(o.logs) : null),
-    );
+    const tiles = h('div', { class: 'grid grid-kpis' },
+      tile('Spark health', 'pulse', h('span', { class: `t-${o.spark.state}` }, h('i', { class: `dot lg ${o.spark.state}` }), ' ', LABEL[o.spark.state]),
+        o.spark.state !== 'unknown' && n ? `Uptime: ${fmtDuration(n.uptime_seconds)}` : (o.spark.reasons[0] || ''), null, '#/spark'),
+      tile('Containers', 'box', ctrs ? `${running} / ${ctrs.length}` : '—', ctrs ? 'Running' : 'Sonar can\'t be read',
+        ctrs && ctrs.length ? h('div', { class: 'progress' }, h('span', { style: { width: `${running / ctrs.length * 100}%`, background: 'var(--green)' } })) : null),
+      tile('CPU usage', 'cpu', n ? fmtPct(n.cpu_pct) : '—', n && cores && isNum(n.cpu_pct) ? `(${(n.cpu_pct / 100 * cores).toFixed(1)} / ${cores} cores)` : '',
+        sparkArea(pts.map((p) => (p.cpu_pct ? p.cpu_pct.avg : null)), COLORS.cpu)),
+      tile('Memory usage', 'memory', n && n.memory_total ? fmtPct(n.memory_used_pct) : '—', n && n.memory_total ? `${fmtBytes(n.memory_used)} / ${fmtBytes(n.memory_total)}` : '',
+        sparkArea(pts.map((p) => (p.mem_used_pct ? p.mem_used_pct.avg : null)), COLORS.mem)),
+      tile('Disk usage', 'disk', disk ? fmtPct(disk.used_pct) : '—', disk ? `${fmtBytes(disk.used)} / ${fmtBytes(disk.total)}` : '',
+        sparkArea(pts.map((p) => (isNum(p.disk_used_bytes) && p.disk_total_bytes ? p.disk_used_bytes / p.disk_total_bytes * 100 : null)), COLORS.disk)),
+      tile('Network (total)', 'network', isNum(rx) && isNum(tx) ? fmtBits(rx + tx) : '—', isNum(rx) ? `↓ ${fmtBits(rx)}  ↑ ${fmtBits(tx)}` : '',
+        sparkArea(net.series ? net.series.points.map((p) => (p.minutes ? (p.rx_bytes + p.tx_bytes) / (p.minutes * 60) : null)) : [], COLORS.rx)));
 
     return [
       heading(page, sourcesPill(o.sources)),
-      kpis,
-      h('div', { class: 'grid grid-2-1' }, attentionPanel(o.attention), h('article', { class: 'card panel' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◇'), 'Project status'),
-          h('a', { href: '#/projects' }, 'All projects')),
-        donut(t))),
+      tiles,
       h('div', { class: 'grid grid-2-1' },
-        h('article', { class: 'card panel' },
-          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '〽'), 'Host CPU and memory'),
-            h('span', { class: 'muted' }, rangeLabel(o.host.range))),
-          hostChart(o.host)),
-        deploysPanel(o.host)),
-      projectsTable(o.projects, { title: 'Projects', compact: true }),
-      recentErrorsPanel(errs),
-      h('p', { class: 'note' }, 'States, versions, uptime and host measurements come from Sonar; errors and log storage from Blackbox; deploys from Lighthouse. ',
+        h('article', { class: 'card panel' }, panelHead('〽', 'System resource usage', h('span', { class: 'muted' }, rangeLabel(host.range))), hostChart(host, { height: 230 })),
+        topContainersCard(ctrs, cores)),
+      h('div', { class: 'grid grid-3' }, serverCard(host, ctrs), diskCard(host, o.disk, o.logs), networkCard(host)),
+      containersCard(ctrs, cores),
+      h('div', { class: 'grid grid-3' }, attentionPanel(o.attention),
+        h('article', { class: 'card panel' }, panelHead('◇', 'Project status', h('a', { href: '#/projects' }, 'All projects')), donut(o.totals)),
+        loadCard(n)),
+      h('div', { class: 'grid grid-1-1' }, deploysPanel(host), errorsCard(o.errors, host.range)),
+      h('p', { class: 'note' }, 'States, the server, containers and uptime come from Sonar; errors and logs from Blackbox; deploys from Lighthouse. ',
         'Anything a source can\'t say is shown as unknown or “—”, never as zero or healthy.'),
     ];
   }
 
-  function recentErrorsPanel(errs) {
-    return h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⚠'), 'Newest errors'),
-        h('a', { href: hashFor('logs', { level: 'error', range: '24h' }) }, 'All errors in Logs')),
-      !errs ? h('div', { class: 'empty' }, 'Blackbox can\'t be read.')
-        : errs.length ? h('div', { class: 'logs' }, errs.map((r) => logRow(r, { compact: true })))
-          : h('div', { class: 'empty' }, 'No error lines in the last 24 hours.'),
-      h('p', { class: 'note' }, 'The newest error lines Blackbox holds. Error counts per project appear once Blackbox serves them.'));
+  // cpuShare is a container's CPU as a share of the whole host, or of one core when the core count isn't known.
+  const cpuShare = (c, cores) => (isNum(c.usage.cpu_cores) ? c.usage.cpu_cores / (cores || 1) * 100 : null);
+  const netRate = (c) => (isNum(c.usage.net_rx_bytes_per_s) ? c.usage.net_rx_bytes_per_s + (c.usage.net_tx_bytes_per_s || 0) : null);
+
+  function topContainersCard(ctrs, cores) {
+    const body = h('div', { class: 'bars top-list' });
+    const by = {
+      cpu: { label: 'CPU usage', value: (c) => cpuShare(c, cores), fmt: (v) => fmtPct(v, 1) },
+      memory: { label: 'Memory', value: (c) => c.usage.memory_bytes, fmt: fmtBytes },
+      network: { label: 'Network', value: netRate, fmt: fmtBits },
+    };
+    const draw = () => {
+      const m = by[state.topBy];
+      const list = (ctrs || []).map((c) => ({ c, v: m.value(c) })).filter((x) => isNum(x.v)).sort((a, b) => b.v - a.v).slice(0, 5);
+      const max = list.length ? list[0].v : 1;
+      body.replaceChildren(...(list.length ? list.map(({ c, v }) => h('div', { class: 'top-row', title: `${c.project}/${c.service}` },
+        h('button', { class: 'link-btn top-name', type: 'button', onclick: () => openProject(c.project) }, c.name || c.service),
+        h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: { width: `${Math.max(2, v / max * 100)}%` } })),
+        h('span', { class: 'bar-value' }, m.fmt(v))))
+        : [h('div', { class: 'empty' }, ctrs ? 'Sonar has no measurements yet.' : 'Sonar can\'t be read.')]));
+    };
+    draw();
+    const pick = h('select', { class: 'select', 'aria-label': 'Measure', onchange: (e) => { state.topBy = e.target.value; draw(); } },
+      Object.entries(by).map(([k, m]) => h('option', { value: k, selected: k === state.topBy }, m.label)));
+    return h('article', { class: 'card panel' }, panelHead('▥', h('span', null, 'Container resource usage ', h('span', { class: 'muted' }, '(Top 5)')), pick), body,
+      h('p', { class: 'note' }, cores ? `CPU is a share of all ${cores} cores.` : 'CPU is a share of one core.'));
+  }
+
+  function containersCard(ctrs, cores) {
+    const body = h('tbody');
+    const count = h('span', { class: 'muted' });
+    const draw = () => {
+      const q = state.containerFilter.trim().toLowerCase();
+      const rows = (ctrs || []).filter((c) => `${c.name} ${c.project} ${c.image}`.toLowerCase().includes(q))
+        .filter((c) => state.containerStatus === 'all' || (state.containerStatus === 'running' ? c.state === 'running' && c.health !== 'unhealthy' : c.state !== 'running' || c.health === 'unhealthy'))
+        .sort((a, b) => (a.state === 'running') - (b.state === 'running') || (cpuShare(b, cores) || 0) - (cpuShare(a, cores) || 0));
+      count.textContent = ctrs ? plural(rows.length, 'container', 'containers') : '';
+      body.replaceChildren(...(rows.length ? rows.map((c) => h('tr', { class: 'clickable', tabindex: 0, title: `Open ${c.project}`,
+        onclick: () => openProject(c.project), onkeydown: (e) => { if (e.key === 'Enter') openProject(c.project); } },
+      h('td', { class: 'name-cell' }, c.name || c.service),
+      h('td', { class: 'muted' }, c.project),
+      h('td', null, containerBadge(c)),
+      h('td', { class: 'mono muted clip', title: c.image }, c.image),
+      h('td', { class: 'num' }, fmtPct(cpuShare(c, cores), 1)),
+      h('td', { class: 'num' }, fmtBytes(c.usage.memory_bytes), c.memory_limit ? h('span', { class: 'muted' }, ` / ${fmtBytes(c.memory_limit)}`) : null),
+      h('td', { class: 'num' }, isNum(c.usage.net_rx_bytes_per_s) ? `${fmtBits(c.usage.net_rx_bytes_per_s)} / ${fmtBits(c.usage.net_tx_bytes_per_s)}` : '—'),
+      h('td', { class: 'num' }, isNum(c.usage.blk_read_bytes_per_s) ? `${fmtRate(c.usage.blk_read_bytes_per_s)} / ${fmtRate(c.usage.blk_write_bytes_per_s)}` : '—'),
+      h('td', { class: `num ${c.restart_count ? 'yellow' : ''}` }, String(c.restart_count)),
+      h('td', { class: 'num muted' }, c.state === 'running' ? (c.started_at ? ago(c.started_at).replace(' ago', '') : '—') : (c.finished_at ? `stopped ${ago(c.finished_at)}` : 'stopped'))))
+        : [h('tr', null, h('td', { colspan: 10, class: 'empty' }, ctrs ? 'No containers match.' : 'Sonar can\'t be read.'))]));
+    };
+    draw();
+    const search = h('label', { class: 'search-box small-box' }, icon('search', 15),
+      h('input', { type: 'search', placeholder: 'Search containers…', 'aria-label': 'Search containers', value: state.containerFilter,
+        oninput: (e) => { state.containerFilter = e.target.value; draw(); } }));
+    const status = h('select', { class: 'select', 'aria-label': 'Container status', onchange: (e) => { state.containerStatus = e.target.value; draw(); } },
+      [['all', 'All statuses'], ['running', 'Running'], ['problem', 'Stopped or unhealthy']].map(([v, l]) => h('option', { value: v, selected: v === state.containerStatus }, l)));
+    return h('article', { class: 'card panel grid' },
+      panelHead('◇', h('span', null, 'Containers ', count), h('div', { class: 'panel-tools' }, search, status)),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'table containers' },
+        h('thead', null, h('tr', null, ['Name', 'Project', 'Status', 'Image'].map((t) => h('th', null, t)),
+          [['CPU', 'Share of all cores'], ['Memory', 'Used / limit'], ['Network', 'In / out'], ['Disk I/O', 'Read / write'], ['Restarts', 'Since the container was created'], ['Uptime', '']]
+            .map(([t, tip]) => h('th', { class: 'num', title: tip }, t)))),
+        body)));
+  }
+
+  function loadCard(n) {
+    return h('article', { class: 'card panel' }, panelHead('▣', 'System load'),
+      n ? [
+        h('div', { class: 'eyebrow' }, 'Load average'),
+        h('div', { class: 'load-grid' }, [['1 min', n.load1], ['5 min', n.load5], ['15 min', n.load15]].map(([l, v]) => h('div', null,
+          h('div', { class: `big ${n.core_pcts && v > n.core_pcts.length ? 'yellow' : ''}` }, v.toFixed(2)), h('div', { class: 'small' }, l)))),
+        n.core_pcts && n.core_pcts.length ? [
+          h('div', { class: 'eyebrow' }, `Each of the ${n.core_pcts.length} cores now`),
+          h('div', { class: 'cores' }, n.core_pcts.map((c, i) => h('span', { class: 'core', title: `Core ${i + 1}: ${fmtPct(c, 1)}` },
+            h('span', { style: { height: `${Math.max(3, Math.min(100, c))}%` } })))),
+        ] : null,
+        n.swap_total ? meter('Swap', n.swap_used / n.swap_total * 100, `${fmtBytes(n.swap_used)} / ${fmtBytes(n.swap_total)}`) : kv('Swap', 'None'),
+      ] : h('div', { class: 'empty' }, 'Sonar hasn\'t read the host yet, or can\'t be read.'));
+  }
+
+  function errorsCard(errors, range) {
+    const head = panelHead('⚠', `Errors, ${rangeLabel(range).toLowerCase()}`, h('a', { href: hashFor('logs', { level: 'error', range }) }, 'Error lines in Logs'));
+    if (!errors) return h('article', { class: 'card panel' }, head, h('div', { class: 'empty' }, 'Blackbox can\'t be read.'));
+    const totals = errors.totals.filter((t) => t.error > 0).sort((a, b) => b.error - a.error).slice(0, 6);
+    const max = totals.length ? totals[0].error : 1;
+    return h('article', { class: 'card panel' }, head,
+      totals.length ? h('div', { class: 'bars top-list' }, totals.map((t) => h('div', { class: 'top-row' },
+        t.project ? h('button', { class: 'link-btn top-name', type: 'button', onclick: () => openProject(t.project) }, t.project) : h('span', { class: 'top-name muted' }, 'no project'),
+        h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill bad', style: { width: `${Math.max(2, t.error / max * 100)}%` } })),
+        h('span', { class: 'bar-value' }, `${fmtCount(t.error)}${t.warn ? ` · ${fmtCount(t.warn)} warn` : ''}`))))
+        : h('div', { class: 'all-clear' }, h('i', { class: 'dot healthy' }), 'No error lines in this range.'),
+      errors.groups && errors.groups.length ? [
+        h('div', { class: 'eyebrow section-gap' }, `Repeated errors${errors.total_groups > errors.groups.length ? `, the ${errors.groups.length} most frequent of ${fmtCount(errors.total_groups)}` : ''}`),
+        errors.groups.slice(0, 5).map((g) => h('div', { class: 'attn' },
+          h('span', { class: 'count-pill' }, `×${fmtCount(g.count)}`),
+          h('div', { class: 'attn-body' }, h('a', { href: hashFor('logs', { around: g.newest_id }), class: 'attn-title mono-ish' }, g.fingerprint),
+            h('div', { class: 'attn-detail' }, `${g.project || g.service} · first ${ago(g.first_seen)}`)),
+          h('div', { class: 'attn-meta', title: fmtFull(g.last_seen) }, ago(g.last_seen)))),
+      ] : null);
   }
 
   function progress(t) {
@@ -666,7 +802,7 @@
         h('div', { class: 'attn-meta' }, a.source, a.at ? h('div', { title: fmtFull(a.at) }, ago(a.at)) : null)))
       : h('div', { class: 'all-clear' }, h('i', { class: 'dot healthy' }), 'Nothing needs attention. Every source is answering and every project is healthy.');
     return h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '♧'), 'Needs attention'),
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('♧'), 'Needs attention'),
         items.length > 12 ? h('span', { class: 'muted' }, `${items.length - 12} more`) : null),
       body);
   }
@@ -674,7 +810,7 @@
   function deploysPanel(host) {
     const list = host.deploys.slice().reverse().slice(0, 8);
     return h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⇪'), 'Deploys'),
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('⇪'), 'Deploys'),
         h('a', { href: hashFor('activity', {}) }, 'Activity')),
       list.length ? list.map((d) => h('div', { class: 'list-row' },
         h('div', { class: 'list-main' },
@@ -733,7 +869,7 @@
       body = rows.map(tr);
     }
     return h('article', { class: 'card panel' },
-      title ? h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◇'), title)) : null,
+      title ? h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('◇'), title)) : null,
       h('div', { class: 'scroll-x' }, h('table', { class: 'table' }, h('thead', null, head), h('tbody', null, body))));
   }
 
@@ -945,7 +1081,7 @@
 
   function infraCard(infra) {
     return h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◉'), 'Infrastructure')),
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('◉'), 'Infrastructure')),
       infra.map((i) => h('div', { class: 'list-row' },
         h('div', { class: 'list-main' }, h('strong', null, i.name),
           h('small', null, i.reported ? (i.version ? `Version ${i.version}` : 'Version unknown') : 'Sonar doesn\'t report it yet')),
@@ -955,7 +1091,7 @@
 
   function logsCard(l) {
     return h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '▤'), 'Log collection')),
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('▤'), 'Log collection')),
       l ? [
         kv('Stored', `${fmtBytes(l.stored_bytes)} of ${fmtBytes(l.max_bytes)}`),
         l.max_bytes ? storageBar(l) : null,
@@ -990,7 +1126,7 @@
       sourceWarnings(a.sources),
       errorChartCard(a.errors, range, project),
       h('article', { class: 'card panel' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⌁'), 'Timeline'),
+        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('⌁'), 'Timeline'),
           h('span', { class: 'muted' }, plural(events.length, 'event', 'events'))),
         events.length ? events.map((e) => h('div', { class: 'event' },
           h('div', { class: 'event-time', title: fmtFull(e.at) }, fmtTime(e.at)),
@@ -1161,7 +1297,7 @@
       return [...out, h('div', { class: 'error-box' }, err.message)];
     }
     out.push(h('article', { class: 'card panel' },
-      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '▤'), 'Lines'), summary),
+      h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('▤'), 'Lines'), summary),
       results, footer,
       h('p', { class: 'note' }, 'Select a line for its fields and the lines around it. Times are your local time.')));
     return out;
@@ -1171,7 +1307,7 @@
     try {
       const c = await api(`/api/v1/logs/${encodeURIComponent(id)}/context?before=30&after=30`);
       return h('article', { class: 'card panel grid' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⌖'), 'Line in context'),
+        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('⌖'), 'Line in context'),
           h('span', { class: 'muted' }, 'Same container, 30 lines either side')),
         h('div', { class: 'logs' }, c.records.map((r) => logRow(r, { target: r.id === c.target }))));
     } catch (err) {
@@ -1247,7 +1383,7 @@
                 h('td', { class: 'muted wrap' }, i.detail))))))),
       h('div', { class: 'grid grid-1-1' },
         h('article', { class: 'card panel' },
-          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⚠'), 'Days with trouble'),
+          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('⚠'), 'Days with trouble'),
             h('span', { class: 'muted' }, `${inc.days.length} in 90 days`)),
           inc.days.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
             h('thead', null, h('tr', null, h('th', null, 'Day (UTC)'), h('th', null, 'Project'), h('th', null, 'Worst'),
@@ -1260,7 +1396,7 @@
                 h('div', { class: 'cov' }, `${Math.round(d.coverage_pct)}% observed`)))))))
             : h('div', { class: 'empty' }, inc.availability.length ? 'No project was down or degraded in the last 90 days.' : 'Sonar can\'t be read.')),
         h('article', { class: 'card panel' },
-          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '◇'), 'Availability')),
+          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, iconFor('◇'), 'Availability')),
           h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
             h('thead', null, h('tr', null, h('th', null, 'Project'), h('th', null, 'Monitoring'), h('th', { class: 'num' }, '30 days'), h('th', { class: 'num' }, '90 days'))),
             h('tbody', null, inc.availability.map((a) => h('tr', { class: 'clickable', onclick: () => openProject(a.project) },
@@ -1319,6 +1455,11 @@
       }
     });
     $('#refresh').addEventListener('click', () => route({ quiet: true }));
+    $('#search').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const q = e.target.value.trim();
+      location.hash = hashFor('logs', { q, range: state.range === '1h' ? '24h' : state.range });
+    });
     $('#drawerClose').addEventListener('click', () => closeDrawer());
     $('#drawerBackdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeDrawer(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });

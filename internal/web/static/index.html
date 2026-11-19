@@ -12,7 +12,7 @@
 <body>
 <div class="shell">
   <aside class="sidebar">
-    <a class="brand" href="#/overview"><span class="brand-mark" aria-hidden="true">◈</span><span class="brand-name">Vista</span></a>
+    <a class="brand" href="#/overview"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 28 9v14l-12 7-12-7V9z" fill="#1d7bf2"/><path d="M16 2 28 9l-12 7L4 9z" fill="#5cb6ff"/><path d="M16 16v14l12-7V9z" fill="#0f55c4"/><path d="M16 9.5 22 13v6l-6 3.5-6-3.5v-6z" fill="none" stroke="#e6f3ff" stroke-width="1.6" stroke-linejoin="round"/></svg><span class="brand-name">Vista</span></a>
     <nav class="nav" id="nav" aria-label="Pages"></nav>
     <div class="side-end">
       <div>Read-only view of Spark</div>
@@ -21,7 +21,10 @@
   </aside>
   <main class="main">
     <header class="topbar">
-      <div class="topbar-title" id="topTitle">Overview</div>
+      <label class="search-box">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"/></svg>
+        <input id="search" type="search" placeholder="Search logs, then press Enter…" aria-label="Search logs" maxlength="200">
+      </label>
       <div class="grow"></div>
       <span class="updated" id="updated" aria-live="polite"></span>
       <label class="sr-only" for="range">Time range</label>
