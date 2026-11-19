@@ -50,29 +50,94 @@ type SonarDay struct {
 	DownMinutes     int      `json:"down_minutes"`
 }
 
-// SonarHistory is Sonar's GET /v1/status/history: host CPU and memory, and deploys.
-type SonarHistory struct {
+// SonarHost is Sonar's GET /v1/monitor/host: the host now and over a range,
+// network traffic per interface, and every project's deploys.
+type SonarHost struct {
 	Range         string        `json:"range"`
 	From          time.Time     `json:"from"`
 	To            time.Time     `json:"to"`
 	BucketSeconds int           `json:"bucket_seconds"`
 	GeneratedAt   time.Time     `json:"generated_at"`
+	Now           *HostNow      `json:"now"` // nil until Sonar's agent has read the host
 	Points        []HostPoint   `json:"points"`
+	Network       []NetSeries   `json:"network"`
 	Updates       []SonarUpdate `json:"updates"`
+}
+
+// HostNow is the host's latest reading.
+type HostNow struct {
+	ReadAt        time.Time  `json:"read_at"`
+	CPUPct        *float64   `json:"cpu_pct"`
+	CorePcts      []float64  `json:"core_pcts"`
+	MemoryTotal   uint64     `json:"memory_total"`
+	MemoryUsed    uint64     `json:"memory_used"`
+	MemoryUsedPct float64    `json:"memory_used_pct"`
+	SwapTotal     uint64     `json:"swap_total"`
+	SwapUsed      uint64     `json:"swap_used"`
+	Load1         float64    `json:"load1"`
+	Load5         float64    `json:"load5"`
+	Load15        float64    `json:"load15"`
+	UptimeSeconds float64    `json:"uptime_seconds"`
+	BootedAt      *time.Time `json:"booted_at"`
+	Disk          *DiskNow   `json:"disk"`
+	Network       []NetNow   `json:"network"`
+}
+
+// DiskNow is the host's filesystem.
+type DiskNow struct {
+	Total      uint64  `json:"total"`
+	Used       uint64  `json:"used"`
+	Available  uint64  `json:"available"`
+	UsedPct    float64 `json:"used_pct"`
+	Inodes     uint64  `json:"inodes"`
+	InodesFree uint64  `json:"inodes_free"`
+}
+
+// NetNow is one interface's current rates; nil until Sonar has two readings.
+type NetNow struct {
+	Interface   string   `json:"interface"`
+	RxBytesPerS *float64 `json:"rx_bytes_per_s"`
+	TxBytesPerS *float64 `json:"tx_bytes_per_s"`
+}
+
+// NetSeries is one interface's traffic over the range, only buckets with data.
+type NetSeries struct {
+	Interface string     `json:"interface"`
+	Points    []NetPoint `json:"points"`
+}
+
+// NetPoint is the bytes an interface moved during one bucket.
+type NetPoint struct {
+	T       time.Time `json:"t"`
+	Minutes int       `json:"minutes"`
+	RxBytes int64     `json:"rx_bytes"`
+	TxBytes int64     `json:"tx_bytes"`
 }
 
 // HostPoint is one bucket of host measurements; nil values are gaps.
 type HostPoint struct {
-	T           time.Time `json:"t"`
-	CPUPct      *Spread   `json:"cpu_pct"`
-	MemUsedPct  *Spread   `json:"mem_used_pct"`
-	CoveragePct float64   `json:"coverage_pct"`
+	T              time.Time `json:"t"`
+	CoveragePct    float64   `json:"coverage_pct"`
+	CPUPct         *Spread   `json:"cpu_pct"`
+	MemUsedPct     *Spread   `json:"mem_used_pct"`
+	MemUsedBytes   *int64    `json:"mem_used_bytes"`
+	MemTotalBytes  *int64    `json:"mem_total_bytes"`
+	SwapUsedBytes  *int64    `json:"swap_used_bytes"`
+	Load1          *Peak     `json:"load1"`
+	DiskUsedBytes  *int64    `json:"disk_used_bytes"`
+	DiskTotalBytes *int64    `json:"disk_total_bytes"`
 }
 
 // Spread is a bucket's average, minimum and maximum.
 type Spread struct {
 	Avg float64 `json:"avg"`
 	Min float64 `json:"min"`
+	Max float64 `json:"max"`
+}
+
+// Peak is a bucket's average and maximum.
+type Peak struct {
+	Avg float64 `json:"avg"`
 	Max float64 `json:"max"`
 }
 
@@ -116,10 +181,10 @@ func sonarStatus(c *apiClient) func(context.Context) (SonarStatus, error) {
 	}
 }
 
-func sonarHistory(c *apiClient, r string) func(context.Context) (SonarHistory, error) {
-	return func(ctx context.Context) (SonarHistory, error) {
-		var h SonarHistory
-		err := c.getJSON(ctx, "/v1/status/history", url.Values{"range": {r}}, &h)
+func sonarHost(c *apiClient, r string) func(context.Context) (SonarHost, error) {
+	return func(ctx context.Context) (SonarHost, error) {
+		var h SonarHost
+		err := c.getJSON(ctx, "/v1/monitor/host", url.Values{"range": {r}}, &h)
 		return h, err
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -47,6 +48,7 @@ func New(src *source.Set, log *slog.Logger, version string) http.Handler {
 	mux.HandleFunc("GET /api/v1/log-sources", s.logSources)
 	mux.HandleFunc("GET /api/v1/deployments/{id}", s.deployment)
 	mux.HandleFunc("GET /api/v1/projects/{name}/releases", s.releases)
+	mux.HandleFunc("GET /api/v1/projects/{name}/usage", s.usage)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No such API path.")
 	})
@@ -115,21 +117,14 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			note(st)
 		},
 		func() {
-			v, have, st := s.src.SonarHistory["1h"].Get(ctx)
-			if have {
-				in.Current = &v
-			}
-			note(st)
-		},
-		func() {
-			v, have, st := s.src.SonarHistory[rng].Get(ctx)
+			v, have, st := s.src.SonarHost[rng].Get(ctx)
 			if have {
 				in.History = &v
 			}
 			note(st)
 		},
 		func() {
-			v, have, st := s.src.SonarHistory["24h"].Get(ctx)
+			v, have, st := s.src.SonarHost["24h"].Get(ctx)
 			if have {
 				in.Day = &v
 			}
@@ -167,14 +162,81 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			in.DayDeploys, in.DayKnown = v, have
 			note(st)
 		},
+		func() {
+			v, have, st := s.src.SonarProjects.Get(ctx)
+			if have {
+				in.Projects = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Conditions.Get(ctx)
+			if have {
+				in.Conditions, in.CondCurrent = &v, st.State == source.OK
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Databases.Get(ctx)
+			if have {
+				in.Databases = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Disk.Get(ctx)
+			if have {
+				in.Disk = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Traffic[source.TrafficRange(rng)].Get(ctx)
+			if have {
+				in.Traffic = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.Apps.Get(ctx)
+			if have {
+				in.Apps = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.ErrorCounts[rng].Get(ctx)
+			if have {
+				in.ErrorCounts = &v
+			}
+			note(st)
+		},
+		func() {
+			v, have, st := s.src.ErrorGroups[rng].Get(ctx)
+			if have {
+				in.ErrorGroups = &v
+			}
+			note(st)
+		},
 	)
-	in.SourceStates = orderSources(append(states, appsStatus))
+	in.SourceStates = orderSources(append(states, appsStatus(in.Apps)))
 	writeJSON(w, http.StatusOK, dashboard.BuildOverview(in))
 }
 
-// appsStatus is the source Vista will read once applications serve usage counts.
-var appsStatus = source.Status{ID: "apps", Name: "Applications", State: source.NotConnected,
-	Detail: "No application serves usage counts yet."}
+// appsStatus is the applications' own reports, which Sonar collects.
+func appsStatus(apps *source.SonarApps) source.Status {
+	st := source.Status{ID: "apps", Name: "Applications", State: source.NotConnected}
+	switch {
+	case apps == nil:
+		st.Detail = "Sonar can't be read, and it collects the applications' reports."
+	case len(apps.Projects) == 0:
+		st.Detail = "No application serves a report yet."
+	default:
+		st.State = source.OK
+		st.Detail = fmt.Sprintf("%d applications report through Sonar.", len(apps.Projects))
+	}
+	return st
+}
 
 // sourceOrder is the order sources are listed in.
 var sourceOrder = map[string]int{"sonar": 0, "blackbox": 1, "lighthouse": 2, "apps": 3}
@@ -198,10 +260,10 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	in := dashboard.ActivityInputs{Now: s.now(), Range: rng}
-	var states [3]source.Status
+	var states [5]source.Status
 	parallel(
 		func() {
-			v, have, st := s.src.SonarHistory[rng].Get(ctx)
+			v, have, st := s.src.SonarHost[rng].Get(ctx)
 			if have {
 				in.History = &v
 			}
@@ -217,18 +279,47 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 			in.Deploys, in.DeploysKnown = v, have
 			states[2] = st
 		},
+		func() {
+			v, have, st := s.src.States[rng].Get(ctx)
+			if have {
+				in.States = &v
+			}
+			states[3] = st
+		},
+		func() {
+			v, have, st := s.src.ErrorCounts[rng].Get(ctx)
+			if have {
+				in.ErrorCounts = &v
+			}
+			states[4] = st
+		},
 	)
 	in.SourceStates = states[:]
 	writeJSON(w, http.StatusOK, dashboard.BuildActivity(in))
 }
 
 func (s *Server) incidents(w http.ResponseWriter, r *http.Request) {
-	v, have, st := s.src.SonarStatus.Get(r.Context())
+	ctx := r.Context()
 	var status *source.SonarStatus
-	if have {
-		status = &v
-	}
-	writeJSON(w, http.StatusOK, dashboard.BuildIncidents(s.now(), status, []source.Status{st}))
+	var spans *source.SonarStates
+	var states [2]source.Status
+	parallel(
+		func() {
+			v, have, st := s.src.SonarStatus.Get(ctx)
+			if have {
+				status = &v
+			}
+			states[0] = st
+		},
+		func() {
+			v, have, st := s.src.States["30d"].Get(ctx)
+			if have {
+				spans = &v
+			}
+			states[1] = st
+		},
+	)
+	writeJSON(w, http.StatusOK, dashboard.BuildIncidents(s.now(), status, spans, states[:]))
 }
 
 func (s *Server) logSources(w http.ResponseWriter, r *http.Request) {
@@ -418,6 +509,28 @@ func (s *Server) releases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"releases": rel})
 }
 
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !namePattern.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "The project must be a plain name.")
+		return
+	}
+	rng, ok := rangeParam(r, "24h")
+	if !ok {
+		writeError(w, http.StatusBadRequest, badRange)
+		return
+	}
+	u, err := s.src.Usage(r.Context(), name, rng)
+	if err != nil {
+		s.sourceError(w, "usage", err)
+		return
+	}
+	if u.Services == nil {
+		u.Services = []source.ServiceUsage{}
+	}
+	writeJSON(w, http.StatusOK, u)
+}
+
 // notFound says what a 404 from each call means.
 var notFound = map[string]string{
 	"log context": "Blackbox no longer has that log line: it may be past retention.",
@@ -428,7 +541,7 @@ var notFound = map[string]string{
 // sourceError answers a failed call to a source.
 func (s *Server) sourceError(w http.ResponseWriter, what string, err error) {
 	switch {
-	case errors.Is(err, source.ErrLogsNotConnected), errors.Is(err, source.ErrLighthouseNotConnected):
+	case errors.Is(err, source.ErrLogsNotConnected), errors.Is(err, source.ErrLighthouseNotConnected), errors.Is(err, source.ErrSonarNotConnected):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, source.ErrNotFound):
 		msg := notFound[what]

@@ -210,7 +210,10 @@ a:hover { text-decoration: underline; }
 .list-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .list-main { min-width: 0; flex: 1; }
 .bars { display: grid; gap: 10px; }
-.bar-row { display: grid; grid-template-columns: 110px minmax(30px, 1fr) 70px; gap: 10px; align-items: center; }
+.bar-row { display: grid; grid-template-columns: 96px 44px minmax(30px, 1fr) minmax(70px, auto); gap: 10px; align-items: center; font-size: 12px; }
+.bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.bar-pct { font-weight: 650; text-align: right; font-variant-numeric: tabular-nums; }
+.bar-value { color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bar-track { height: 10px; border-radius: 4px; background: #263a52; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #1686ed, #39acff); }
 .bar-fill.warn { background: var(--yellow); }
@@ -290,7 +293,8 @@ a:hover { text-decoration: underline; }
   .heading { flex-direction: column; }
   .kpi { min-height: 96px; }
   .big { font-size: 19px; }
-  .bar-row { grid-template-columns: 80px minmax(30px, 1fr) 60px; }
+  .bar-row { grid-template-columns: 74px 38px minmax(30px, 1fr); }
+  .bar-value { display: none; }
 }
 
 .content > .card { margin-bottom: 12px; }
@@ -298,3 +302,13 @@ a:hover { text-decoration: underline; }
 .steps { flex-basis: 100%; margin-top: 6px; border-left: 2px solid #2b5375; padding-left: 10px; }
 .step .list-row { padding: 4px 0; }
 .step-log { margin: 4px 0 8px; padding: 8px; max-height: 220px; overflow: auto; background: #07111f; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chip { padding: 2px 8px; border-radius: 12px; font-size: 10.5px; background: #1c2a3b; color: var(--muted); }
+.chip.ok { background: #0f3a2c; color: var(--green); }
+.chip.warn { background: #3a2c10; color: var(--yellow); }
+.net-now { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+.net-now > div + div { border-left: 1px solid var(--stroke-soft); padding-left: 12px; }
+.table td.wrap { white-space: normal; min-width: 240px; font-size: 11.5px; }
+.drawer .eyebrow { margin-top: 6px; }
+.kind.state { background: #2a1f45; color: #c9a6ff; }

@@ -4,17 +4,18 @@ Vista is a private, read-only dashboard for Spark, the server Mobasity's project
 
 ## Features
 
-- See what needs attention first: projects that are down or degraded, failed deploys, projects whose deploys keep failing, log gaps and sources that stopped answering.
-- Follow Spark apart from the projects: its CPU and memory, and the state of the services every project relies on.
-- Check every project's state, version, monitoring method, response time, 30- and 90-day uptime with coverage, and daily history.
-- Read deploys and log gaps on one timeline, filtered by project, and open each deploy's steps and the output of the one that failed.
+- See what needs attention first: projects that are down or degraded, the server's own conditions such as a filling disk, failed deploys, projects whose deploys keep failing, log gaps and sources that stopped answering.
+- Follow Spark apart from the projects: its state and conditions, CPU, memory, swap, load, disk and network over time, sparkdb's connections and database sizes, disk use per project, traffic per site, and the state of the services every project relies on.
+- See every container with its state, health, restarts, CPU, memory against its limit, and network and disk traffic.
+- Check every project's state and since when, version, outside checks, response time, 30- and 90-day uptime with coverage, daily history, resource use over time, storage, error counts and the counters and checks the app itself reports.
+- Read deploys, health changes and log gaps on one timeline, with error and warning counts per hour, filtered by project, and open each deploy's steps and the output of the one that failed.
 - See each project's deploy state, the version it runs and its releases.
-- See the newest error lines across every project.
+- See error counts per project, repeated errors grouped together, and the newest error lines.
 - Search the logs every container wrote, open a line's fields, and read the lines around it.
-- Review availability and the days each project was down or degraded.
+- Review availability, every incident in the last 30 days with when it began and ended, and the days each project was down or degraded.
 - See where each piece of information comes from and how fresh it is. A source that can't be read is shown as unknown, never as zero or healthy.
 
-Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime and host measurements, [Blackbox](https://github.com/lsariol/blackbox) for logs, and [Lighthouse](https://github.com/lsariol/lighthouse) for deploys and releases, through their read-only APIs, and only while a page is open. Without Lighthouse, it shows the container swaps Sonar saw instead. It has no controls: it can't deploy, restart, change settings or read secrets.
+Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime, the server, containers and the apps' reports, [Blackbox](https://github.com/lsariol/blackbox) for logs and error counts, and [Lighthouse](https://github.com/lsariol/lighthouse) for deploys and releases, through their read-only APIs, and only while a page is open. Without Lighthouse, it shows the container swaps Sonar saw instead. It has no controls: it can't deploy, restart, change settings or read secrets.
 
 ## Requirements
 

@@ -61,6 +61,25 @@
     return `${(sec / 3600).toFixed(1)} h`;
   }
   const fmtMinutes = (m) => (m < 90 ? `${m} min` : `${(m / 60).toFixed(1)} h`);
+  // Network rates are shown in bits per second, as links are sold.
+  function fmtBits(bytesPerS) {
+    if (!isNum(bytesPerS)) return '—';
+    const b = bytesPerS * 8;
+    if (b >= 1e9) return `${(b / 1e9).toFixed(1)} Gbps`;
+    if (b >= 1e6) return `${(b / 1e6).toFixed(b >= 1e8 ? 0 : 1)} Mbps`;
+    if (b >= 1e3) return `${(b / 1e3).toFixed(b >= 1e5 ? 0 : 1)} kbps`;
+    return `${Math.round(b)} bps`;
+  }
+  const fmtRate = (bytesPerS) => (isNum(bytesPerS) ? `${fmtBytes(bytesPerS)}/s` : '—');
+  const fmtCores = (c) => (isNum(c) ? `${(c * 100).toFixed(c >= 0.1 ? 0 : 1)}%` : '—');
+  function fmtDuration(sec) {
+    if (!isNum(sec)) return '—';
+    const d = Math.floor(sec / 86400), hr = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d) return `${plural(d, 'day', 'days')}, ${plural(hr, 'hour', 'hours')}`;
+    if (hr) return `${plural(hr, 'hour', 'hours')}, ${m} min`;
+    return `${m} min`;
+  }
+  const fmtCount = (n) => (isNum(n) ? n.toLocaleString() : '—');
   const toDate = (iso) => (iso ? new Date(iso) : null);
   function fmtTime(iso) {
     const d = toDate(iso);
@@ -133,7 +152,7 @@
     { id: 'overview', label: 'Overview', ico: '⌂', render: renderOverview, auto: true, sub: 'What needs attention on Spark and its projects' },
     { id: 'projects', label: 'Projects', ico: '◇', render: renderProjects, auto: true, sub: 'Every project Sonar watches, with its version and availability' },
     { id: 'spark', label: 'Spark', ico: 'ϟ', render: renderSpark, auto: true, sub: 'The server itself: its resources and the infrastructure every project relies on' },
-    { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys and log gaps on one timeline' },
+    { id: 'activity', label: 'Activity', ico: '⌁', render: renderActivity, auto: true, sub: 'Deploys, health changes, errors and log gaps on one timeline' },
     { id: 'logs', label: 'Logs', ico: '▤', render: renderLogs, auto: false, sub: 'Search what every container wrote, kept by Blackbox' },
     { id: 'incidents', label: 'Incidents', ico: '⚠', render: renderIncidents, auto: true, sub: 'Availability and the days projects were down or degraded' },
     { id: 'sources', label: 'Sources', ico: '◉', render: renderSources, auto: true, sub: 'Where Vista\'s information comes from, and how fresh it is' },
@@ -266,8 +285,9 @@
     return wrap;
   }
 
-  function drawChart(wrap, W, { height = 190, from, to, series, markers = [], label, unit = '%', yMax = 100 }) {
-    const H = height, pad = { l: 40, r: 10, t: 10, b: 22 };
+  function drawChart(wrap, W, { height = 190, from, to, series, markers = [], label, yMax = 100,
+    axis = (v) => `${Math.round(v)}%`, tipFmt = (v) => fmtPct(v, 1) }) {
+    const H = height, pad = { l: 52, r: 10, t: 10, b: 22 };
     const x0 = pad.l, x1 = W - pad.r, y0 = pad.t, y1 = H - pad.b;
     const all = series.flatMap((se) => se.points.map((p) => p.t));
     const tMin = from ?? Math.min(...all), tMax = to ?? Math.max(...all);
@@ -279,7 +299,7 @@
     for (const f of [0, 0.25, 0.5, 0.75, 1]) {
       const y = Y(f * yMax);
       svg.append(s('line', { class: 'grid-line', x1: x0, x2: x1, y1: y, y2: y }),
-        s('text', { x: x0 - 6, y: y + 3, 'text-anchor': 'end' }, `${Math.round(f * yMax)}${unit}`));
+        s('text', { x: x0 - 6, y: y + 3, 'text-anchor': 'end' }, axis(f * yMax)));
     }
     const ticks = W < 500 ? 3 : 6;
     for (let i = 0; i <= ticks; i++) {
@@ -325,8 +345,8 @@
       const rows = [h('div', { class: 'muted' }, fmtFull(new Date(base[best].t).toISOString()))];
       for (const se of series) {
         const p = se.points[best];
-        let v = p && isNum(p.v) ? fmtPct(p.v, 1) : 'no data';
-        if (p && isNum(p.v) && se.band) v += ` (${fmtPct(p.min, 0)}–${fmtPct(p.max, 0)})`;
+        let v = p && isNum(p.v) ? tipFmt(p.v) : 'no data';
+        if (p && isNum(p.v) && se.band) v += ` (${tipFmt(p.min)}–${tipFmt(p.max)})`;
         rows.push(h('div', null, h('span', { style: { color: se.color } }, '● '), `${se.name}: ${v}`));
       }
       const near = markers.filter((m) => Math.abs(X(m.t) - px) < 6);
@@ -339,6 +359,13 @@
     });
     hit.addEventListener('mouseleave', () => { tip.hidden = true; cross.setAttribute('opacity', 0); });
     wrap.replaceChildren(svg, tip);
+  }
+
+  function niceMax(v) {
+    if (!isNum(v) || v <= 0) return 1;
+    const p = 10 ** Math.floor(Math.log10(v));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+    return 10 * p;
   }
 
   function segments(points) {
@@ -364,29 +391,179 @@
     }
     const pts = host.points.map((p) => ({ t: Date.parse(p.t), p }));
     const pick = (key) => pts.map(({ t, p }) => ({ t, v: p[key] ? p[key].avg : null, min: p[key] ? p[key].min : null, max: p[key] ? p[key].max : null }));
+    const disk = pts.map(({ t, p }) => ({ t, v: isNum(p.disk_used_bytes) && p.disk_total_bytes ? p.disk_used_bytes / p.disk_total_bytes * 100 : null }));
     const markers = host.deploys.map((d) => ({
       t: Date.parse(d.started),
       color: d.outcome === 'ok' ? '#20d58a' : '#fc526b',
       label: `${d.project} deploy ${d.outcome === 'ok' ? '' : `${d.outcome} `}${d.to || ''}`.replace(/\s+/g, ' ').trim(),
     }));
+    const hasDisk = disk.some((p) => isNum(p.v));
     return [
       lineChart({
         height: height || 190, band,
         from: host.from ? Date.parse(host.from) : undefined,
         to: host.to ? Date.parse(host.to) : undefined,
-        label: 'Host CPU and memory use over time',
+        label: 'Host CPU, memory and disk use over time',
         series: [
-          { name: 'CPU', color: '#30a7ff', points: pick('cpu_pct'), band },
-          { name: 'Memory', color: '#ae75fc', points: pick('mem_used_pct'), band },
-        ],
+          { name: 'CPU', color: COLORS.cpu, points: pick('cpu_pct'), band },
+          { name: 'Memory', color: COLORS.mem, points: pick('mem_used_pct'), band },
+          hasDisk ? { name: 'Disk', color: COLORS.disk, points: disk } : null,
+        ].filter(Boolean),
         markers,
       }),
       h('div', { class: 'legend' },
-        h('span', null, h('i', { class: 'cpu' }), 'CPU'),
-        h('span', null, h('i', { class: 'mem' }), 'Memory'),
+        h('span', null, h('i', { style: { background: COLORS.cpu } }), 'CPU'),
+        h('span', null, h('i', { style: { background: COLORS.mem } }), 'Memory'),
+        hasDisk ? h('span', null, h('i', { style: { background: COLORS.disk } }), 'Disk') : null,
         h('span', null, h('i', { class: 'deploy' }), 'Deploy'),
         h('span', null, h('i', { class: 'deploy-bad' }), 'Failed deploy')),
     ];
+  }
+
+  const COLORS = { cpu: '#30a7ff', mem: '#ae75fc', disk: '#20d58a', rx: '#30a7ff', tx: '#20d58a', err: '#fc526b', warn: '#ffbe45' };
+
+  // mainInterface is the host's network link: the first with current rates.
+  function mainInterface(host) {
+    const now = host.now && host.now.network ? host.now.network : [];
+    const live = now.find((n) => isNum(n.rx_bytes_per_s));
+    const name = live ? live.interface : (host.network[0] && host.network[0].interface);
+    return { name, now: live || null, series: host.network.find((n) => n.interface === name) || null };
+  }
+
+  function networkChart(host, { height = 150 } = {}) {
+    const { name, series } = mainInterface(host);
+    if (!series || !series.points.length) return h('div', { class: 'empty' }, 'No network history: Sonar doesn\'t serve it yet.');
+    const rate = (p, key) => (p.minutes ? p[key] / (p.minutes * 60) : null);
+    const rx = series.points.map((p) => ({ t: Date.parse(p.t), v: rate(p, 'rx_bytes') }));
+    const tx = series.points.map((p) => ({ t: Date.parse(p.t), v: rate(p, 'tx_bytes') }));
+    const top = niceMax(Math.max(...rx.map((p) => p.v || 0), ...tx.map((p) => p.v || 0)) * 1.1);
+    return [
+      lineChart({ height, yMax: top, axis: fmtBits, tipFmt: fmtBits, label: `Network traffic on ${name}`,
+        from: host.from ? Date.parse(host.from) : undefined, to: host.to ? Date.parse(host.to) : undefined,
+        series: [{ name: 'Download', color: COLORS.rx, points: rx }, { name: 'Upload', color: COLORS.tx, points: tx }] }),
+      h('div', { class: 'legend' },
+        h('span', null, h('i', { style: { background: COLORS.rx } }), 'Download'),
+        h('span', null, h('i', { style: { background: COLORS.tx } }), 'Upload'),
+        h('span', { class: 'muted' }, `Average per ${fmtSeconds(host.bucket_seconds)} on ${name}`)),
+    ];
+  }
+
+  function networkCard(host) {
+    const { name, now } = mainInterface(host);
+    return h('article', { class: 'card panel' },
+      panelHead('⇅', 'Network I/O', h('span', { class: 'muted' }, rangeLabel(host.range))),
+      h('div', { class: 'net-now' },
+        h('div', null, h('div', { class: 'big blue' }, '↓ ', now ? fmtBits(now.rx_bytes_per_s) : '—'), h('div', { class: 'small' }, 'Download')),
+        h('div', null, h('div', { class: 'big green' }, '↑ ', now ? fmtBits(now.tx_bytes_per_s) : '—'), h('div', { class: 'small' }, 'Upload'))),
+      networkChart(host),
+      name ? null : h('p', { class: 'note' }, 'Sonar hasn\'t read the host\'s network yet.'));
+  }
+
+  const panelHead = (ico, title, extra) => h('div', { class: 'panel-head' },
+    h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, ico), title), extra || null);
+
+  // bar is a labelled meter; pct is of the whole track.
+  function meter(label, pct, value, color) {
+    const cls = !color ? (pct > 90 ? 'bad' : pct > 75 ? 'warn' : '') : '';
+    return h('div', { class: 'bar-row' },
+      h('span', { class: 'bar-label', title: label }, label),
+      h('span', { class: 'bar-pct' }, isNum(pct) ? fmtPct(pct, pct < 10 && pct > 0 ? 1 : 0) : '—'),
+      h('div', { class: 'bar-track' }, h('div', { class: `bar-fill ${cls}`, style: { width: `${Math.min(100, Math.max(0, pct || 0))}%`, background: color || null } })),
+      h('span', { class: 'bar-value' }, value));
+  }
+
+  function serverCard(host, containers) {
+    const n = host.now;
+    const running = containers ? containers.filter((c) => c.state === 'running').length : null;
+    return h('article', { class: 'card panel' },
+      panelHead('▣', 'Server information'),
+      n ? [
+        kv('Uptime', fmtDuration(n.uptime_seconds)),
+        kv('Started', n.booted_at ? fmtFull(n.booted_at) : '—'),
+        kv('CPU', n.core_pcts && n.core_pcts.length ? `${plural(n.core_pcts.length, 'core', 'cores')}, ${fmtPct(n.cpu_pct, 1)} in use` : fmtPct(n.cpu_pct, 1)),
+        kv('Memory', `${fmtBytes(n.memory_total)} (${fmtBytes(n.memory_used)} used)`),
+        kv('Swap', n.swap_total ? `${fmtBytes(n.swap_total)} (${fmtBytes(n.swap_used)} used)` : 'None'),
+        kv('Load average', `${n.load1.toFixed(2)} · ${n.load5.toFixed(2)} · ${n.load15.toFixed(2)}`),
+        kv('Disk', n.disk ? `${fmtBytes(n.disk.total)} (${fmtBytes(n.disk.available)} free)` : '—'),
+        kv('Containers', containers ? `${containers.length} (${running} running, ${containers.length - running} not)` : '—'),
+        kv('Read by Sonar', `${fmtTime(n.read_at)} (${ago(n.read_at)})`),
+      ] : h('div', { class: 'empty' }, 'Sonar hasn\'t read the host yet, or can\'t be read.'));
+  }
+
+  function diskCard(host, disk, logs) {
+    const d = host.now && host.now.disk;
+    const rows = [];
+    if (d) rows.push(meter('Filesystem', d.used_pct, `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`));
+    if (d && disk) {
+      const t = disk.totals;
+      const share = (b) => b / d.total * 100;
+      if (isNum(t.data_bytes)) rows.push(meter('Data folders', share(t.data_bytes), fmtBytes(t.data_bytes), '#ffa53d'));
+      rows.push(meter('Images', share(t.image_bytes), fmtBytes(t.image_bytes), '#30a7ff'));
+      rows.push(meter('Volumes', share(t.volume_bytes), fmtBytes(t.volume_bytes), '#ae75fc'));
+      rows.push(meter('Build cache', share(t.build_cache_bytes), fmtBytes(t.build_cache_bytes), '#8397b0'));
+    }
+    if (logs && logs.max_bytes) rows.push(meter('Logs (cap)', logs.stored_bytes / logs.max_bytes * 100, `${fmtBytes(logs.stored_bytes)} / ${fmtBytes(logs.max_bytes)}`, '#20d58a'));
+    return h('article', { class: 'card panel' },
+      panelHead('◫', 'Disk usage', disk ? h('span', { class: 'muted', title: fmtFull(disk.measured_at) }, `measured ${ago(disk.measured_at)}`) : null),
+      rows.length ? h('div', { class: 'bars' }, rows) : h('div', { class: 'empty' }, 'Sonar hasn\'t measured the disk yet, or can\'t be read.'),
+      h('p', { class: 'note' }, 'Shares are of the whole disk. Logs are measured against Blackbox\'s own cap.'));
+  }
+
+  function databasesCard(db) {
+    return h('article', { class: 'card panel' },
+      panelHead('⛁', 'Databases', db ? h('span', { class: 'muted' }, `sparkdb, read ${ago(db.read_at)}`) : null),
+      db ? [
+        meter('Connections', db.connections / db.max_connections * 100, `${db.connections} / ${db.max_connections}`),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
+          h('thead', null, h('tr', null, h('th', null, 'Database'), h('th', null, 'Project'), h('th', { class: 'num' }, 'Size'), h('th', { class: 'num' }, 'Connections'))),
+          h('tbody', null, db.databases.slice().sort((a, b) => b.size_bytes - a.size_bytes).map((d) => h('tr', null,
+            h('td', { class: 'mono' }, d.name), h('td', null, d.project || '—'), h('td', { class: 'num' }, fmtBytes(d.size_bytes)),
+            h('td', { class: 'num' }, `${d.connections}${d.active ? ` (${d.active} active)` : ''}`)))))),
+      ] : h('div', { class: 'empty' }, 'Sonar hasn\'t read sparkdb yet, or can\'t be read.'));
+  }
+
+  function diskByProjectCard(disk) {
+    if (!disk) return h('article', { class: 'card panel' }, panelHead('◫', 'Disk use by project'), h('div', { class: 'empty' }, 'Sonar hasn\'t measured it yet, or can\'t be read.'));
+    const rows = disk.projects.map((p) => ({ ...p, total: (p.data_bytes || 0) + p.image_bytes + p.container_bytes + p.volume_bytes }))
+      .sort((a, b) => b.total - a.total);
+    return h('article', { class: 'card panel' }, panelHead('◫', 'Disk use by project'),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
+        h('thead', null, h('tr', null, h('th', null, 'Project'), h('th', { class: 'num' }, 'Data folder'), h('th', { class: 'num' }, 'Images'),
+          h('th', { class: 'num' }, 'Volumes'), h('th', { class: 'num' }, 'In all'))),
+        h('tbody', null, rows.map((p) => h('tr', { class: 'clickable', onclick: () => openProject(p.project) },
+          h('td', { class: 'name-cell' }, p.project),
+          h('td', { class: 'num' }, isNum(p.data_bytes) ? fmtBytes(p.data_bytes) : '—', p.data_unreadable ? h('div', { class: 'cov' }, `${p.data_unreadable} unreadable`) : null),
+          h('td', { class: 'num' }, fmtBytes(p.image_bytes)), h('td', { class: 'num' }, fmtBytes(p.volume_bytes)), h('td', { class: 'num' }, fmtBytes(p.total))))))),
+      h('p', { class: 'note' }, 'Images count only layers no other project shares.'));
+  }
+
+  function trafficCard(traffic, range) {
+    return h('article', { class: 'card panel' },
+      panelHead('◎', 'Traffic per site', h('span', { class: 'muted' }, `${rangeLabel(range)}, from Cloudflare`)),
+      !traffic ? h('div', { class: 'empty' }, 'Sonar can\'t be read.')
+        : !traffic.length ? h('div', { class: 'empty' }, 'No traffic recorded in this range.')
+          : h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
+            h('thead', null, h('tr', null, h('th', null, 'Site'), h('th', null, 'Project'), h('th', { class: 'num' }, 'Requests'), h('th', { class: 'num' }, 'Server errors'), h('th', { class: 'num' }, 'Sent'))),
+            h('tbody', null, traffic.slice().sort((a, b) => b.requests - a.requests).map((t) => h('tr', null,
+              h('td', { class: 'mono' }, t.host), h('td', null, t.project || '—'), h('td', { class: 'num' }, fmtCount(t.requests)),
+              h('td', { class: `num ${t.errors_5xx ? 'red' : ''}` }, fmtCount(t.errors_5xx)), h('td', { class: 'num' }, fmtBytes(t.bytes))))))));
+  }
+
+  function sparkHealthCard(spark) {
+    return h('article', { class: 'card panel' },
+      panelHead('ϟ', 'Spark health'),
+      h('div', { class: `big t-${spark.state}` }, '● ', LABEL[spark.state]),
+      spark.reasons.length ? h('ul', { class: 'notes' }, spark.reasons.map((r) => h('li', null, r))) : null,
+      spark.conditions.length
+        ? h('div', { class: 'section' }, spark.conditions.map((c) => h('div', { class: 'attn' },
+          h('i', { class: `dot ${c.level === 'critical' ? 'down' : 'warn'}` }),
+          h('div', { class: 'attn-body' }, h('div', { class: 'attn-title' }, c.message)),
+          h('div', { class: 'attn-meta', title: fmtFull(c.since) }, `since ${ago(c.since)}`))))
+        : spark.state === 'healthy' ? h('p', { class: 'note' }, 'Sonar reports no conditions on the server.') : null,
+      spark.collectors.length ? h('div', { class: 'chips' }, spark.collectors.map((c) => h('span', {
+        class: `chip ${c.state === 'available' ? 'ok' : c.state === 'unsupported' ? 'off' : 'warn'}`,
+        title: c.error || (c.last_ok ? `Last reading ${fmtFull(c.last_ok)}` : c.state),
+      }, c.name))) : null);
   }
 
   function donut(t) {
@@ -534,12 +711,15 @@
     compact ? null : h('td', { class: 'muted' }, p.monitoring),
     h('td', { class: 'num' }, isNum(p.response_ms) ? `${p.response_ms} ms` : '—'),
     h('td', { class: 'num' }, fmtUptime(p.uptime_30d), h('div', { class: 'cov' }, `${Math.round(p.uptime_30d.coverage_pct)}% observed`)),
+    compact ? null : h('td', { class: `num ${p.errors && p.errors.error ? 'red' : ''}`, title: p.errors ? `${p.errors.warn} warnings` : 'Blackbox can\'t be read' },
+      p.errors ? fmtCount(p.errors.error) : '—'),
     h('td', null, dayStrip(p.days.slice(-30))));
 
     const head = h('tr', null, h('th', null, 'Project'), h('th', null, 'Status'), h('th', null, 'Version'),
       compact ? null : h('th', null, 'Monitoring'), h('th', { class: 'num' }, 'Response'), h('th', { class: 'num' }, 'Uptime 30d'),
+      compact ? null : h('th', { class: 'num', title: `Error lines, ${rangeLabel(state.range).toLowerCase()}` }, 'Errors'),
       h('th', null, 'Last 30 days'));
-    const cols = compact ? 6 : 7;
+    const cols = compact ? 6 : 8;
     let body;
     if (!rows.length) {
       body = [h('tr', null, h('td', { colspan: cols, class: 'empty' }, projects.length ? 'No projects match.' : 'No projects: Sonar can\'t be read.'))];
@@ -598,6 +778,7 @@
       return;
     }
     const errorsHost = h('div', null, h('div', { class: 'loading' }, 'Loading errors…'));
+    const usageHost = h('div', null, h('div', { class: 'loading' }, 'Loading…'));
     const releasesHost = h('div', { class: 'section' });
     const days = p.days.filter((d) => d.state !== 'no_data');
     const downDays = p.days.filter((d) => d.down_minutes > 0).length;
@@ -626,15 +807,28 @@
             kv('When', `${fmtFull(p.last_deploy.started)} (took ${fmtSeconds(p.last_deploy.seconds)}, from ${p.last_deploy.source})`)]
           : kv('Last deploy, 24 hours', 'None')),
         releasesHost),
-      section('Errors, 24 hours', errorsHost),
-      section('Resources', h('div', { class: 'card muted' }, 'Not available yet: Sonar doesn\'t serve per-project CPU, memory or network to Vista.')),
-      section('Usage', h('div', { class: 'card muted' }, `Not instrumented: ${name} doesn't serve usage counts.`)),
+      p.checks && p.checks.length ? section('Outside checks', h('div', { class: 'card' }, p.checks.map((c) => h('div', { class: 'list-row' },
+        h('div', { class: 'list-main' }, h('span', { class: 'mono' }, c.url),
+          h('small', null, c.last_at ? `${c.last_status ? `HTTP ${c.last_status}` : 'No answer'}${isNum(c.last_latency_ms) ? `, ${c.last_latency_ms} ms` : ''}, ${ago(c.last_at)}` : 'Not checked yet',
+            c.consecutive_failures ? ` · ${plural(c.consecutive_failures, 'failure', 'failures')} in a row` : ''),
+          c.last_error ? h('small', { class: 't-down' }, c.last_error) : null),
+        badge(c.state === 'operational' ? 'healthy' : c.state))))) : null,
+      section('Containers', containerList(o.containers, name)),
+      section(`Resources, ${rangeLabel(state.range).toLowerCase()}`, usageHost),
+      storageSection(p),
+      p.traffic && p.traffic.length ? section(`Traffic, ${rangeLabel(o.traffic_range).toLowerCase()}`, h('div', { class: 'card' }, p.traffic.map((t) =>
+        kv(t.host, `${fmtCount(t.requests)} requests, ${fmtCount(t.errors_5xx)} server errors, ${fmtBytes(t.bytes)} sent`)))) : null,
+      section(`Errors, ${rangeLabel(state.range).toLowerCase()}`,
+        p.errors ? h('div', { class: 'card' }, kv('Error lines', h('span', { class: p.errors.error ? 'red' : '' }, fmtCount(p.errors.error))), kv('Warnings', fmtCount(p.errors.warn))) : null,
+        errorsHost),
+      appSection(p),
       h('div', { class: 'log-actions' },
         h('a', { href: hashFor('logs', { project: name, range: '24h' }) }, 'Open its logs'),
         h('a', { href: hashFor('activity', { project: name }) }, 'Its activity')),
       h('p', { class: 'note' }, 'Read-only. Events close together are leads to investigate, not proof of cause.'),
     );
     loadReleases(name, releasesHost);
+    loadUsage(name, usageHost);
     try {
       const page = await api(`/api/v1/logs?${new URLSearchParams({ project: name, level: 'error', range: '24h', limit: '8' })}`);
       errorsHost.replaceChildren(page.records.length
@@ -643,6 +837,68 @@
         : h('div', { class: 'card muted' }, 'No error lines in the last 24 hours.'));
     } catch (err) {
       errorsHost.replaceChildren(h('div', { class: 'card muted' }, err.message));
+    }
+  }
+
+  function containerList(containers, project) {
+    if (!containers) return h('div', { class: 'card muted' }, 'Sonar can\'t be read.');
+    const list = containers.filter((c) => c.project === project);
+    if (!list.length) return h('div', { class: 'card muted' }, 'Sonar reports no containers for it.');
+    return h('div', { class: 'card' }, list.map((c) => h('div', { class: 'list-row' },
+      h('div', { class: 'list-main' }, h('strong', null, c.name || c.service), ' ', h('span', { class: 'muted mono' }, c.image),
+        h('small', null, `CPU ${fmtCores(c.usage.cpu_cores)} · memory ${fmtBytes(c.usage.memory_bytes)}${c.memory_limit ? ` of ${fmtBytes(c.memory_limit)}` : ''}`,
+          ` · network ${fmtBits(c.usage.net_rx_bytes_per_s)} in, ${fmtBits(c.usage.net_tx_bytes_per_s)} out`),
+        h('small', null, c.state === 'running' ? `Up ${c.started_at ? ago(c.started_at).replace(' ago', '') : '—'}` : `Stopped ${c.finished_at ? ago(c.finished_at) : ''}, exit code ${c.exit_code}`,
+          c.restart_count ? ` · ${plural(c.restart_count, 'restart', 'restarts')}` : '')),
+      containerBadge(c))));
+  }
+
+  function containerBadge(c) {
+    if (c.state !== 'running') return badge(c.state === 'restarting' ? 'degraded' : 'down', c.state ? c.state[0].toUpperCase() + c.state.slice(1) : 'Unknown');
+    if (c.health === 'unhealthy') return badge('down', 'Unhealthy');
+    if (c.health === 'starting') return badge('degraded', 'Starting');
+    return badge('healthy', 'Running');
+  }
+
+  function storageSection(p) {
+    const rows = [];
+    if (p.disk) {
+      rows.push(kv('Data folder', isNum(p.disk.data_bytes) ? `${fmtBytes(p.disk.data_bytes)} in ${fmtCount(p.disk.data_files)} files` : 'None'));
+      rows.push(kv('Images and containers', `${fmtBytes(p.disk.image_bytes)} and ${fmtBytes(p.disk.container_bytes)}`));
+      if (p.disk.volume_bytes) rows.push(kv('Volumes', fmtBytes(p.disk.volume_bytes)));
+    }
+    for (const d of p.databases || []) rows.push(kv(`Database ${d.name}`, `${fmtBytes(d.size_bytes)}, ${plural(d.connections, 'connection', 'connections')}`));
+    return rows.length ? section('Storage', h('div', { class: 'card' }, rows)) : null;
+  }
+
+  function appSection(p) {
+    const a = p.app;
+    if (!a) return section('Usage', h('div', { class: 'card muted' }, `Not instrumented: ${p.name} doesn't serve a report.`));
+    return section('Usage, 30 days', h('div', { class: 'card' },
+      a.counters.map((c) => kv(c.name.replace(/_/g, ' '), fmtCount(c.total))),
+      a.checks.map((c) => kv(c.name.replace(/_/g, ' '), badge(c.ok ? 'healthy' : 'down', c.ok ? 'OK' : c.message))),
+      a.reporters.filter((r) => r.error).map((r) => kv(`Report from ${r.container}`, h('span', { class: 't-down' }, r.error))),
+      !a.counters.length && !a.checks.length ? h('div', { class: 'muted' }, 'Its report has no counters or checks.') : null));
+  }
+
+  async function loadUsage(name, host) {
+    try {
+      const u = await api(`/api/v1/projects/${encodeURIComponent(name)}/usage?range=${encodeURIComponent(state.range)}`);
+      if (!u.services.length) { host.replaceChildren(h('div', { class: 'card muted' }, 'Sonar has no measurements for it in this range.')); return; }
+      const palette = ['#30a7ff', '#ae75fc', '#20d58a', '#ffbe45', '#fc526b', '#27d3d3'];
+      const series = (fn) => u.services.map((sv, i) => ({ name: sv.service, color: palette[i % palette.length], points: sv.points.map((p) => ({ t: Date.parse(p.t), v: fn(p) })) }));
+      const cpu = series((p) => (p.cpu_cores ? p.cpu_cores.avg * 100 : null));
+      const mem = series((p) => (p.memory_bytes ? p.memory_bytes.avg : null));
+      const top = (ss) => niceMax(Math.max(0, ...ss.flatMap((x) => x.points.map((p) => p.v || 0))) * 1.15);
+      const opts = { height: 130, from: Date.parse(u.from), to: Date.parse(u.to) };
+      host.replaceChildren(h('div', { class: 'card' },
+        h('div', { class: 'eyebrow' }, 'CPU, share of one core'),
+        lineChart({ ...opts, series: cpu, yMax: top(cpu), label: `${name} CPU`, axis: (v) => `${Math.round(v)}%`, tipFmt: (v) => fmtPct(v, 1) }),
+        h('div', { class: 'eyebrow' }, 'Memory'),
+        lineChart({ ...opts, series: mem, yMax: top(mem), label: `${name} memory`, axis: fmtBytes, tipFmt: fmtBytes }),
+        h('div', { class: 'legend' }, cpu.map((x) => h('span', null, h('i', { style: { background: x.color } }), x.name)))));
+    } catch (err) {
+      host.replaceChildren(h('div', { class: 'card muted' }, err.message));
     }
   }
 
@@ -676,27 +932,14 @@
     const infraProjects = o.projects.filter((p) => p.infrastructure);
     return [
       heading(page, sourcesPill(o.sources)),
-      h('div', { class: 'grid grid-3' },
-        h('article', { class: 'card panel' },
-          h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, 'ϟ'), 'Spark health')),
-          h('div', { class: `big t-${o.spark.state}` }, '● ', LABEL[o.spark.state]),
-          o.spark.reasons.length
-            ? h('ul', { class: 'notes' }, o.spark.reasons.map((r) => h('li', null, r)))
-            : null,
-          h('div', { class: 'section' },
-            kv('CPU now', o.host.cpu ? `${fmtPct(o.host.cpu.pct, 1)} at ${fmtTime(o.host.cpu.at)}` : '—'),
-            kv('Memory now', o.host.memory ? `${fmtPct(o.host.memory.pct, 1)} at ${fmtTime(o.host.memory.at)}` : '—'))),
-        infraCard(o.infrastructure),
-        logsCard(o.logs)),
+      h('div', { class: 'grid grid-3' }, sparkHealthCard(o.spark), serverCard(o.host, o.containers), infraCard(o.infrastructure)),
       h('article', { class: 'card panel grid' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '〽'), 'Host CPU and memory'),
-          h('span', { class: 'muted' }, `${rangeLabel(o.host.range)} · average, with each bucket's range shaded`)),
+        panelHead('〽', 'Host resources', h('span', { class: 'muted' }, `${rangeLabel(o.host.range)} · average, with each bucket's range shaded`)),
         hostChart(o.host, { height: 260, band: true })),
+      h('div', { class: 'grid grid-3' }, diskCard(o.host, o.disk, o.logs), networkCard(o.host), databasesCard(o.databases)),
+      h('div', { class: 'grid grid-1-1' }, diskByProjectCard(o.disk), logsCard(o.logs)),
+      trafficCard(o.traffic, o.traffic_range),
       projectsTable(infraProjects, { title: 'Infrastructure projects' }),
-      h('article', { class: 'card panel' },
-        h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '○'), 'Not collected yet')),
-        h('div', { class: 'bars' }, o.host.not_collected.map((n) => h('div', { class: 'list-row' }, h('span', null, n), badge('not_connected', 'Not available')))),
-        h('p', { class: 'note' }, 'These appear here once Sonar collects and serves them to Vista.')),
     ];
   }
 
@@ -733,7 +976,7 @@
     const kind = params.get('kind') || '';
     const events = a.events.filter((e) => (!project || e.project === project) && (!kind || e.kind === kind));
     const nav = (changes) => { location.hash = hashFor('activity', { range: params.get('range'), project, kind, ...changes }); };
-    const kinds = { deploy: 'Deploy', deploy_failed: 'Failed deploy', log_gap: 'Log gap' };
+    const kinds = { deploy: 'Deploy', deploy_failed: 'Failed deploy', state: 'Health change', log_gap: 'Log gap' };
     const projects = project && !a.projects.includes(project) ? [...a.projects, project] : a.projects;
     return [
       heading(page),
@@ -745,6 +988,7 @@
         h('span', { class: 'pill' }, rangeLabel(range)),
         h('a', { href: hashFor('logs', { project: 'lighthouse', q: 'deploy', range }) }, 'Lighthouse\'s deploy log')),
       sourceWarnings(a.sources),
+      errorChartCard(a.errors, range, project),
       h('article', { class: 'card panel' },
         h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⌁'), 'Timeline'),
           h('span', { class: 'muted' }, plural(events.length, 'event', 'events'))),
@@ -762,6 +1006,62 @@
       h('ul', { class: 'notes' }, a.notes.map((n) => h('li', null, n))),
     ];
   }
+
+  // errorChartCard draws Blackbox's error and warn lines per bucket, stacked.
+  function errorChartCard(errors, range, project) {
+    const title = `Errors and warnings${project ? ` in ${project}` : ''}`;
+    if (!errors) return h('article', { class: 'card panel grid' }, panelHead('▥', title), h('div', { class: 'empty' }, 'Blackbox can\'t be read.'));
+    const span = rangeMs(range);
+    const step = errors.bucket === 'day' ? 864e5 : 36e5;
+    const end = Math.ceil(Date.now() / step) * step, start = end - Math.ceil(span / step) * step;
+    const n = Math.round((end - start) / step);
+    const err = new Array(n).fill(0), warn = new Array(n).fill(0);
+    for (const b of errors.buckets) {
+      if (project && b.project !== project) continue;
+      const i = Math.floor((Date.parse(b.start) - start) / step);
+      if (i >= 0 && i < n) { err[i] += b.error; warn[i] += b.warn; }
+    }
+    const totalErr = err.reduce((x, y) => x + y, 0), totalWarn = warn.reduce((x, y) => x + y, 0);
+    return h('article', { class: 'card panel grid' },
+      panelHead('▥', title, h('span', { class: 'muted' }, `${fmtCount(totalErr)} errors, ${fmtCount(totalWarn)} warnings · per ${errors.bucket}`)),
+      barChart({ start, step, err, warn }),
+      h('div', { class: 'legend' }, h('span', null, h('i', { style: { background: COLORS.err } }), 'Errors'), h('span', null, h('i', { style: { background: COLORS.warn } }), 'Warnings')));
+  }
+
+  function barChart({ start, step, err, warn, height = 120 }) {
+    const wrap = h('div', { class: 'chart-wrap' });
+    const draw = (W) => {
+      const pad = { l: 40, r: 8, t: 8, b: 20 }, H = height, n = err.length;
+      const top = niceMax(Math.max(1, ...err.map((e, i) => e + warn[i])));
+      const bw = (W - pad.l - pad.r) / n;
+      const Y = (v) => H - pad.b - (H - pad.t - pad.b) * v / top;
+      const svg = s('svg', { class: 'chart', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Error and warning lines per bucket' });
+      for (const f of [0, 0.5, 1]) svg.append(s('line', { class: 'grid-line', x1: pad.l, x2: W - pad.r, y1: Y(f * top), y2: Y(f * top) }),
+        s('text', { x: pad.l - 6, y: Y(f * top) + 3, 'text-anchor': 'end' }, fmtCount(Math.round(f * top))));
+      for (let i = 0; i < n; i++) {
+        const x = pad.l + i * bw + bw * 0.15, w = Math.max(1, bw * 0.7);
+        const label = `${fmtFull(new Date(start + i * step).toISOString())}: ${err[i]} errors, ${warn[i]} warnings`;
+        if (err[i]) svg.append(s('rect', { x, y: Y(err[i]), width: w, height: Y(0) - Y(err[i]), fill: COLORS.err, rx: 1 }, s('title', null, label)));
+        if (warn[i]) svg.append(s('rect', { x, y: Y(err[i] + warn[i]), width: w, height: Y(0) - Y(warn[i]), fill: COLORS.warn, rx: 1 }, s('title', null, label)));
+      }
+      const ticks = W < 500 ? 3 : 6;
+      for (let k = 0; k <= ticks; k++) {
+        const t = start + (n * step) * k / ticks;
+        svg.append(s('text', { x: pad.l + (W - pad.l - pad.r) * k / ticks, y: H - 5, 'text-anchor': k === 0 ? 'start' : k === ticks ? 'end' : 'middle' }, tickLabel(t, n * step)));
+      }
+      wrap.replaceChildren(svg);
+    };
+    let lastW = 0;
+    const ro = new ResizeObserver(() => {
+      if (!wrap.isConnected) { ro.disconnect(); return; }
+      const w = Math.floor(wrap.clientWidth);
+      if (w > 0 && w !== lastW) { lastW = w; draw(w); }
+    });
+    ro.observe(wrap);
+    return wrap;
+  }
+
+  const rangeMs = (r) => ({ '1h': 36e5, '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 }[r] || 864e5);
 
   // stepsToggle shows a Lighthouse deploy's steps, loaded when first opened.
   function stepsToggle(id) {
@@ -934,6 +1234,17 @@
     return [
       heading(page, inc.overall ? h('span', { class: 'pill' }, `Public projects, 30 days: ${fmtUptime(inc.overall)} up`) : null),
       sourceWarnings(inc.sources),
+      h('article', { class: 'card panel grid' },
+        panelHead('⚠', 'Incidents, last 30 days', inc.incidents ? h('span', { class: 'muted' }, plural(inc.incidents.length, 'incident', 'incidents')) : null),
+        !inc.incidents ? h('div', { class: 'empty' }, 'Sonar\'s state changes can\'t be read.')
+          : !inc.incidents.length ? h('div', { class: 'empty' }, 'No project was down or degraded in the last 30 days.')
+            : h('div', { class: 'scroll-x' }, h('table', { class: 'table' },
+              h('thead', null, h('tr', null, h('th', null, 'Began'), h('th', null, 'Project'), h('th', null, 'State'), h('th', { class: 'num' }, 'Lasted'), h('th', null, 'What wasn\'t up'))),
+              h('tbody', null, inc.incidents.map((i) => h('tr', { class: 'clickable', onclick: () => openProject(i.project) },
+                h('td', { class: 'mono', title: `${fmtFull(i.start)} to ${fmtFull(i.end)}` }, fmtTime(i.start)),
+                h('td', { class: 'name-cell' }, i.project), h('td', null, badge(i.state)),
+                h('td', { class: 'num' }, fmtSeconds((Date.parse(i.end) - Date.parse(i.start)) / 1000)),
+                h('td', { class: 'muted wrap' }, i.detail))))))),
       h('div', { class: 'grid grid-1-1' },
         h('article', { class: 'card panel' },
           h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('span', { class: 'ico' }, '⚠'), 'Days with trouble'),
@@ -962,13 +1273,11 @@
 
   // ---------- Sources ----------
   const SOURCE_INFO = {
-    sonar: { gives: 'Every project\'s state, version, uptime and daily history; host CPU and memory; container swaps.',
-      missing: 'Spark\'s own conditions, per-project resources, disk, network, load, restarts, and when each state change began.' },
-    blackbox: { gives: 'Log search, the lines around a line, the newest errors, log sources, gaps and collection health.',
-      missing: 'Error counts per project and hour.' },
+    sonar: { gives: 'Each project\'s state, version, uptime, history and state changes; the host\'s CPU, memory, swap, load, disk and network; '
+      + 'every container with its use and restarts; outside checks; sparkdb\'s connections and sizes; disk use per project; and traffic per site from Cloudflare.' },
+    blackbox: { gives: 'Log search, the lines around a line, error counts per project, repeated errors, log sources, gaps and collection health.' },
     lighthouse: { gives: 'Deploy records with their steps, rollbacks, releases, and each project\'s deploy state.' },
-    apps: { gives: 'Usage counts each application defines, such as games played or commands run.',
-      missing: 'No application serves them yet.' },
+    apps: { gives: 'Counters and checks each application reports, such as games played or commands run, collected by Sonar.' },
   };
 
   async function renderSources({ page }) {

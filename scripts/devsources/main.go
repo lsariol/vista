@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -53,7 +52,17 @@ func main() {
 	mux.HandleFunc("GET /v1/deployments", lhDeployments)
 	mux.HandleFunc("GET /v1/deployments/{id}", lhDeployment)
 	mux.HandleFunc("GET /v1/releases", lhReleases)
-	mux.HandleFunc("GET /v1/status/history", history)
+	mux.HandleFunc("GET /v1/monitor/host", host)
+	mux.HandleFunc("GET /v1/monitor/projects", monitorProjects)
+	mux.HandleFunc("GET /v1/monitor/conditions", conditions)
+	mux.HandleFunc("GET /v1/monitor/states", states)
+	mux.HandleFunc("GET /v1/monitor/usage", usage)
+	mux.HandleFunc("GET /v1/monitor/databases", databases)
+	mux.HandleFunc("GET /v1/monitor/disk", disk)
+	mux.HandleFunc("GET /v1/monitor/traffic", traffic)
+	mux.HandleFunc("GET /v1/monitor/apps", apps)
+	mux.HandleFunc("GET /v1/stats/errors", errorCounts)
+	mux.HandleFunc("GET /v1/stats/errors/groups", errorGroups)
 	mux.HandleFunc("GET /v1/logs", logs)
 	mux.HandleFunc("GET /v1/logs/{id}/context", logContext)
 	mux.HandleFunc("GET /v1/sources", sources)
@@ -122,43 +131,6 @@ func status(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"generated_at": now, "fresh": true,
 		"overall": map[string]any{"state": "degraded", "uptime_30d": map[string]any{"pct": 99.71, "coverage_pct": 98.4}}, "projects": out})
-}
-
-func history(w http.ResponseWriter, r *http.Request) {
-	rng := r.URL.Query().Get("range")
-	span, bucket := map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}[rng],
-		map[string]time.Duration{"1h": time.Minute, "24h": 5 * time.Minute, "7d": 30 * time.Minute, "30d": 2 * time.Hour}[rng]
-	if span == 0 {
-		http.Error(w, `{"error":"bad range"}`, http.StatusBadRequest)
-		return
-	}
-	to := time.Now().UTC().Truncate(bucket)
-	from := to.Add(-span)
-	var points []map[string]any
-	n := int(span / bucket)
-	for i := 1; i <= n; i++ {
-		t := from.Add(time.Duration(i) * bucket)
-		x := float64(t.Unix()) / bucket.Seconds()
-		if i > n/3 && i < n/3+n/30+1 { // a gap: the agent was down
-			points = append(points, map[string]any{"t": t, "cpu_pct": nil, "mem_used_pct": nil, "coverage_pct": 0})
-			continue
-		}
-		cpu := 16 + 6*math.Sin(x/7) + 3*math.Sin(x/2.3)
-		if i == n*3/4 {
-			cpu += 38
-		}
-		mem := 41 + 3*math.Sin(x/23)
-		points = append(points, map[string]any{"t": t,
-			"cpu_pct":      map[string]float64{"avg": cpu, "min": cpu * 0.55, "max": math.Min(100, cpu*1.6)},
-			"mem_used_pct": map[string]float64{"avg": mem, "min": mem - 1.2, "max": mem + 1.5}, "coverage_pct": 100})
-	}
-	updates := []map[string]any{
-		{"project": "lys", "started": to.Add(-span * 3 / 4), "ended": to.Add(-span*3/4 + 41*time.Second), "seconds": 41, "from": "v0.5.0", "to": "v0.5.1", "outcome": "ok"},
-		{"project": "dibs", "started": to.Add(-span / 4), "ended": to.Add(-span/4 + 2*time.Minute), "seconds": 120, "from": "v0.2.9", "to": "v0.3.0", "outcome": "failed"},
-		{"project": "mobasity-web", "started": to.Add(-2 * time.Minute), "ended": to, "seconds": 120, "from": "v1.7.2", "to": "v1.8.0", "outcome": "ok"},
-	}
-	writeJSON(w, map[string]any{"range": rng, "from": from, "to": to, "bucket_seconds": int(bucket.Seconds()), "generated_at": time.Now().UTC(),
-		"points": points, "updates": updates})
 }
 
 type record struct {

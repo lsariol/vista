@@ -6,6 +6,7 @@ package dashboard
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -40,10 +41,13 @@ func fromSonar(s string) Health {
 }
 
 // infrastructure are the projects Spark itself runs on, in the order they're
-// listed, shown apart from the apps until Sonar reports each project's tier.
+// listed. Sonar's group label decides for a project that carries it.
 var infrastructure = []string{"sparkdb", "cove", "lighthouse", "cloudflared", "sonar", "blackbox"}
 
-func isInfrastructure(name string) bool {
+func isInfrastructure(name string, group *string) bool {
+	if group != nil {
+		return *group == "infrastructure"
+	}
 	for _, n := range infrastructure {
 		if n == name {
 			return true
@@ -66,6 +70,23 @@ type Project struct {
 	Days           []source.SonarDay `json:"days"`
 	LastDeploy     *Deploy           `json:"last_deploy"`
 	Lighthouse     *DeployState      `json:"lighthouse"` // nil when Lighthouse can't be read or doesn't know it
+
+	// Sonar's and Blackbox's detail; nil or empty when they can't be read.
+	StateSince      *time.Time             `json:"state_since"`
+	StateSinceExact bool                   `json:"state_since_exact"`
+	Checks          []source.MonitorCheck  `json:"checks"`
+	Disk            *source.ProjectDiskUse `json:"disk"`
+	Databases       []source.DatabaseNow   `json:"databases"`
+	Traffic         []source.HostTraffic   `json:"traffic"`
+	App             *source.AppProject     `json:"app"`
+	Errors          *source.ErrorTotal     `json:"errors"`
+}
+
+// Container is one container, as Sonar reports it.
+type Container struct {
+	Project string `json:"project"`
+	Service string `json:"service"`
+	source.ContainerState
 }
 
 // DeployState is how Lighthouse reports a project's deploys.
@@ -118,7 +139,7 @@ func deployFromLighthouse(d source.LighthouseDeployment) Deploy {
 
 // pickDeploys is Lighthouse's records when Lighthouse answered, otherwise
 // the swaps Sonar saw; oldest first either way.
-func pickDeploys(lh []source.LighthouseDeployment, lhKnown bool, sonar *source.SonarHistory) []Deploy {
+func pickDeploys(lh []source.LighthouseDeployment, lhKnown bool, sonar *source.SonarHost) []Deploy {
 	out := []Deploy{}
 	switch {
 	case lhKnown:
@@ -187,11 +208,13 @@ type Infra struct {
 	Reported bool    `json:"reported"`
 }
 
-// Spark is the server's own health, apart from the apps. Sonar doesn't
-// report it yet, so it's unknown, with the reasons why.
+// Spark is the server's own health, apart from the apps, as Sonar's
+// conditions report it. Reasons say why it's unknown.
 type Spark struct {
-	State   Health   `json:"state"`
-	Reasons []string `json:"reasons"`
+	State      Health             `json:"state"`
+	Reasons    []string           `json:"reasons"`
+	Conditions []source.Condition `json:"conditions"`
+	Collectors []source.Collector `json:"collectors"`
 }
 
 // Reading is one current measurement.
@@ -204,26 +227,24 @@ type Reading struct {
 type Host struct {
 	CPU           *Reading           `json:"cpu"`
 	Memory        *Reading           `json:"memory"`
+	Now           *source.HostNow    `json:"now"`
 	Range         string             `json:"range"`
 	BucketSeconds int                `json:"bucket_seconds"`
 	From          *time.Time         `json:"from"`
 	To            *time.Time         `json:"to"`
 	Points        []source.HostPoint `json:"points"`
+	Network       []source.NetSeries `json:"network"`
 	Deploys       []Deploy           `json:"deploys"`
 	DeploySource  string             `json:"deploy_source"` // Lighthouse, or Sonar when Lighthouse can't be read
-	NotCollected  []string           `json:"not_collected"`
 }
 
-// notCollected are measurements the idea calls for that no source serves yet.
-var notCollected = []string{
-	"Disk space",
-	"Network traffic",
-	"Load average",
-	"Swap",
-	"Per-project CPU, memory, network and disk",
-	"Database connections and size per project",
-	"Container restarts",
-	"Conditions such as low disk space",
+// Errors is Blackbox's error counts for the range.
+type Errors struct {
+	Bucket      string               `json:"bucket"` // hour or day
+	Buckets     []source.ErrorBucket `json:"buckets"`
+	Totals      []source.ErrorTotal  `json:"totals"`
+	Groups      []source.ErrorGroup  `json:"groups"` // nil when Blackbox couldn't group them
+	TotalGroups int64                `json:"total_groups"`
 }
 
 // Totals counts projects by state.
@@ -260,6 +281,13 @@ type Overview struct {
 	Infrastructure []Infra            `json:"infrastructure"`
 	Logs           *LogsSummary       `json:"logs"`
 	RecentErrors   []source.LogRecord `json:"recent_errors"` // nil when Blackbox can't be read
+
+	Containers   []Container            `json:"containers"` // nil when Sonar's detail can't be read
+	Databases    *source.DatabaseServer `json:"databases"`
+	Disk         *source.DiskUseNow     `json:"disk"`
+	Traffic      []source.HostTraffic   `json:"traffic"` // nil when Sonar can't be read
+	TrafficRange string                 `json:"traffic_range"`
+	Errors       *Errors                `json:"errors"` // nil when Blackbox can't be read
 }
 
 // Inputs are the sources' answers for one Overview. A nil pointer is a
@@ -269,9 +297,8 @@ type Inputs struct {
 	Range        string
 	Status       *source.SonarStatus
 	StatusState  source.Status
-	Current      *source.SonarHistory          // the last hour, for current readings
-	History      *source.SonarHistory          // the chosen range
-	Day          *source.SonarHistory          // the last 24 hours, for failed deploys
+	History      *source.SonarHost             // the chosen range, with the host now
+	Day          *source.SonarHost             // the last 24 hours, for failed deploys
 	Deploys      []source.LighthouseDeployment // the chosen range
 	DeploysKnown bool
 	DayDeploys   []source.LighthouseDeployment // the last 24 hours
@@ -284,6 +311,16 @@ type Inputs struct {
 	GapsKnown    bool
 	Blackbox     *source.BlackboxStatus
 	SourceStates []source.Status
+
+	Projects    *source.SonarProjects
+	Conditions  *source.SonarConditions
+	CondCurrent bool // the conditions are Sonar's latest answer
+	Databases   *source.SonarDatabases
+	Disk        *source.SonarDisk
+	Traffic     *source.SonarTraffic
+	Apps        *source.SonarApps
+	ErrorCounts *source.ErrorCounts
+	ErrorGroups *source.ErrorGroups
 }
 
 // BuildOverview assembles the Overview.
@@ -307,11 +344,18 @@ func BuildOverview(in Inputs) Overview {
 			lhByKey[p.Key()] = p
 		}
 	}
+	detail := map[string]source.MonitorProject{}
+	if in.Projects != nil {
+		for _, p := range in.Projects.Projects {
+			detail[p.Project] = p
+		}
+	}
 	if in.Status != nil {
 		for _, p := range in.Status.Projects {
+			d, hasDetail := detail[p.Project]
 			row := Project{
 				Name:           p.Project,
-				Infrastructure: isInfrastructure(p.Project),
+				Infrastructure: isInfrastructure(p.Project, d.Group),
 				State:          fromSonar(p.State),
 				Version:        p.Version,
 				Monitoring:     monitoring(p.Evidence),
@@ -330,6 +374,10 @@ func BuildOverview(in Inputs) Overview {
 				row.Lighthouse = &DeployState{State: lp.State, Mode: lp.DeployMode, Version: lp.DeployedVersion,
 					DeployedAt: lp.DeployedAt, LastError: lp.LastError, LastErrorAt: lp.LastErrorAt}
 			}
+			if hasDetail {
+				row.StateSince, row.StateSinceExact, row.Checks = d.StateSince, d.StateSinceExact, d.Checks
+			}
+			addDetail(&row, in)
 			o.Projects = append(o.Projects, row)
 		}
 	}
@@ -362,6 +410,21 @@ func BuildOverview(in Inputs) Overview {
 		o.Host.DeploySource = "Lighthouse"
 	}
 	o.Infrastructure = buildInfra(o.Projects)
+	o.Containers = buildContainers(in.Projects)
+	if in.Databases != nil {
+		o.Databases = in.Databases.Now
+	}
+	if in.Disk != nil {
+		o.Disk = in.Disk.Now
+	}
+	o.TrafficRange = source.TrafficRange(in.Range)
+	if in.Traffic != nil {
+		o.Traffic = in.Traffic.Hosts
+		if o.Traffic == nil {
+			o.Traffic = []source.HostTraffic{}
+		}
+	}
+	o.Errors = buildErrors(in.ErrorCounts, in.ErrorGroups)
 	if in.ErrorsKnown {
 		o.RecentErrors = in.RecentErrors
 		if o.RecentErrors == nil {
@@ -401,26 +464,115 @@ func stateRank(h Health) int {
 }
 
 func buildHost(in Inputs) Host {
-	h := Host{Range: in.Range, Points: []source.HostPoint{}, NotCollected: notCollected}
+	h := Host{Range: in.Range, Points: []source.HostPoint{}, Network: []source.NetSeries{}}
 	h.Deploys = pickDeploys(in.Deploys, in.DeploysKnown, in.History)
-	if in.Current != nil {
-		for i := len(in.Current.Points) - 1; i >= 0; i-- {
-			p := in.Current.Points[i]
-			if h.CPU == nil && p.CPUPct != nil {
-				h.CPU = &Reading{Pct: p.CPUPct.Avg, At: p.T}
-			}
-			if h.Memory == nil && p.MemUsedPct != nil {
-				h.Memory = &Reading{Pct: p.MemUsedPct.Avg, At: p.T}
+	if in.History == nil {
+		return h
+	}
+	if n := in.History.Now; n != nil {
+		h.Now = n
+		if n.CPUPct != nil {
+			h.CPU = &Reading{Pct: *n.CPUPct, At: n.ReadAt}
+		}
+		if n.MemoryTotal > 0 {
+			h.Memory = &Reading{Pct: n.MemoryUsedPct, At: n.ReadAt}
+		}
+	}
+	from, to := in.History.From, in.History.To
+	h.From, h.To = &from, &to
+	h.BucketSeconds = in.History.BucketSeconds
+	if in.History.Points != nil {
+		h.Points = in.History.Points
+	}
+	if in.History.Network != nil {
+		h.Network = in.History.Network
+	}
+	return h
+}
+
+// addDetail attaches what Sonar and Blackbox report for one project.
+func addDetail(row *Project, in Inputs) {
+	name := row.Name
+	if in.Disk != nil && in.Disk.Now != nil {
+		for i := range in.Disk.Now.Projects {
+			if in.Disk.Now.Projects[i].Project == name {
+				row.Disk = &in.Disk.Now.Projects[i]
 			}
 		}
 	}
-	if in.History != nil {
-		from, to := in.History.From, in.History.To
-		h.From, h.To = &from, &to
-		h.BucketSeconds = in.History.BucketSeconds
-		h.Points = in.History.Points
+	if in.Databases != nil && in.Databases.Now != nil {
+		for _, d := range in.Databases.Now.Databases {
+			if d.Project != nil && *d.Project == name {
+				row.Databases = append(row.Databases, d)
+			}
+		}
 	}
-	return h
+	if in.Traffic != nil {
+		for _, h := range in.Traffic.Hosts {
+			if h.Project != nil && *h.Project == name {
+				h.Points = nil // the page shows totals only
+				row.Traffic = append(row.Traffic, h)
+			}
+		}
+	}
+	if in.Apps != nil {
+		for i := range in.Apps.Projects {
+			if in.Apps.Projects[i].Project == name {
+				row.App = &in.Apps.Projects[i]
+			}
+		}
+	}
+	if in.ErrorCounts != nil {
+		row.Errors = &source.ErrorTotal{}
+		for _, t := range in.ErrorCounts.Totals {
+			if t.Project != nil && *t.Project == name {
+				row.Errors = &t
+			}
+		}
+	}
+}
+
+// buildContainers lists every container Sonar reports, by project and name.
+func buildContainers(p *source.SonarProjects) []Container {
+	if p == nil {
+		return nil
+	}
+	out := []Container{}
+	for _, proj := range p.Projects {
+		for _, svc := range proj.Services {
+			for _, c := range svc.Containers {
+				out = append(out, Container{Project: proj.Project, Service: svc.Service, ContainerState: c})
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Project != out[j].Project {
+			return out[i].Project < out[j].Project
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// buildErrors is Blackbox's counts and repeated errors, nil without counts.
+func buildErrors(counts *source.ErrorCounts, groups *source.ErrorGroups) *Errors {
+	if counts == nil {
+		return nil
+	}
+	e := &Errors{Bucket: counts.Bucket, Buckets: counts.Buckets, Totals: counts.Totals}
+	if e.Buckets == nil {
+		e.Buckets = []source.ErrorBucket{}
+	}
+	if e.Totals == nil {
+		e.Totals = []source.ErrorTotal{}
+	}
+	if groups != nil {
+		e.Groups, e.TotalGroups = groups.Groups, groups.TotalGroups
+		if e.Groups == nil {
+			e.Groups = []source.ErrorGroup{}
+		}
+	}
+	return e
 }
 
 // buildInfra lists every infrastructure project with the state Sonar
@@ -430,8 +582,14 @@ func buildInfra(projects []Project) []Infra {
 	for _, p := range projects {
 		byName[p.Name] = p
 	}
-	out := make([]Infra, 0, len(infrastructure))
-	for _, name := range infrastructure {
+	names := append([]string{}, infrastructure...)
+	for _, p := range projects {
+		if p.Infrastructure && !slices.Contains(names, p.Name) {
+			names = append(names, p.Name)
+		}
+	}
+	out := make([]Infra, 0, len(names))
+	for _, name := range names {
 		i := Infra{Name: name, State: Unknown}
 		if p, ok := byName[name]; ok {
 			i.State, i.Version, i.Reported = p.State, p.Version, true
@@ -441,17 +599,34 @@ func buildInfra(projects []Project) []Infra {
 	return out
 }
 
-// buildSpark says why Spark's own state isn't known: Sonar reports projects,
-// not the server's conditions, and Vista doesn't guess them.
+// sparkStates maps Sonar's word for Spark onto Vista's.
+var sparkStates = map[string]Health{"ok": Healthy, "warning": Degraded, "critical": Down}
+
+// buildSpark is Spark's state as Sonar's conditions report it, or unknown
+// with the reason when they can't be trusted. Vista doesn't guess it.
 func buildSpark(in Inputs) Spark {
-	s := Spark{State: Unknown, Reasons: []string{}}
-	switch {
-	case in.Status == nil || in.StatusState.State != source.OK:
-		s.Reasons = append(s.Reasons, "Sonar can't be read.")
-	case !in.Status.Fresh:
-		s.Reasons = append(s.Reasons, "Sonar's measurements are out of date: its agent may be stopped.")
+	s := Spark{State: Unknown, Reasons: []string{}, Conditions: []source.Condition{}, Collectors: []source.Collector{}}
+	c := in.Conditions
+	if c != nil {
+		if c.Conditions != nil {
+			s.Conditions = c.Conditions
+		}
+		if c.Collectors != nil {
+			s.Collectors = c.Collectors
+		}
 	}
-	s.Reasons = append(s.Reasons, "Sonar doesn't report the server's own conditions yet.")
+	switch {
+	case c == nil || !in.CondCurrent:
+		s.Reasons = append(s.Reasons, "Sonar can't be read.")
+	case !c.Fresh:
+		s.Reasons = append(s.Reasons, "Sonar's measurements are out of date: its agent may be stopped.")
+	default:
+		if st, ok := sparkStates[c.State]; ok {
+			s.State = st
+		} else {
+			s.Reasons = append(s.Reasons, "Sonar has no measurement of the server yet.")
+		}
+	}
 	return s
 }
 
@@ -509,6 +684,22 @@ func buildAttention(in Inputs, o Overview) []Attention {
 				continue
 			}
 			add(a)
+		}
+	}
+	if in.Conditions != nil && in.CondCurrent && in.Conditions.Fresh {
+		for _, c := range in.Conditions.Conditions {
+			if c.ID == "project" {
+				continue // each project's own line says it
+			}
+			since := c.Since
+			level := "warn"
+			if c.Level == "critical" {
+				level = "down"
+			}
+			add(Attention{Level: level, Title: c.Message, Source: "Sonar", At: &since, Link: "#/spark"})
+		}
+		for _, a := range in.Conditions.Attention {
+			add(Attention{Level: "info", Title: "Sonar: " + a, Source: "Sonar", Link: "#/spark"})
 		}
 	}
 	if in.Blackbox != nil {
