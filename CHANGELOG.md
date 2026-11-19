@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.0 (2026-11-19)
+
+Vista shows everything Sonar and Blackbox now serve, and the Overview is laid out as a server dashboard.
+
+### Added
+
+- The Overview has tiles for Spark's health and uptime, containers running, CPU, memory, disk and network with their trends; a CPU, memory and disk chart with deploys marked; the five containers using the most CPU, memory or network; server information, disk usage and network traffic; every container with its state, use against its limits, restarts and uptime; the load average and each core's use; and error counts per project with repeated errors grouped.
+- Spark's state is Sonar's own, from its conditions, and each condition, such as a filling disk, is listed under what needs attention.
+- The Spark page shows swap, load, disk and network over time, which of Sonar's measurements work, sparkdb's connections and database sizes, disk use per project, and traffic per site from Cloudflare.
+- Each project shows since when it has been in its state, its outside checks, its containers, its CPU and memory over time, its data folder and databases, its traffic, its error counts, and the counters and checks the app itself reports.
+- Activity lists each time a project was down or degraded, with the services and checks that weren't up, and charts error and warning lines per hour.
+- Incidents lists every stretch a project was down or degraded in the last 30 days, with when it began and ended.
+- The Projects table shows each project's error lines in the chosen range.
+- A search box at the top of every page searches the logs.
+
+### Changed
+
+- Host measurements come from Sonar's detailed host answer instead of its public history.
+- A project is shown as infrastructure when Sonar's group label says so; the built-in list covers projects without the label.
+- The pages use line icons, and the Sources page no longer lists measurements as not served.
+
 ## v0.0.0 (2026-11-19)
 
 The first version: a read-only dashboard over Sonar, Blackbox and Lighthouse, behind Cloudflare Access.
