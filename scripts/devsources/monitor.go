@@ -194,7 +194,8 @@ func states(w http.ResponseWriter, r *http.Request) {
 			}
 			end := start.Add(time.Duration(t[2].(int)) * time.Minute)
 			cause := []map[string]any{{"service": name, "state": t[0], "minutes": t[2]}}
-			checks := []map[string]any{{"service": name, "url": "https://" + name + ".mobasity.com", "state": t[0], "failures": t[2], "slow": 0, "last_error": "502 Bad Gateway"}}
+			checks := []map[string]any{{"service": name, "url": "https://" + name + ".mobasity.com", "state": t[0], "failures": t[2], "slow": 3, "last_error": "502 Bad Gateway",
+				"slowest": map[string]any{"at": start.Add(2 * time.Minute), "ms": 2640, "dns_ms": 18, "connect_ms": 2410, "tls_ms": 96, "wait_ms": 104, "read_ms": 12}}}
 			sp = append(sp, map[string]any{"state": t[0], "start": start, "end": end, "observed_minutes": t[2], "services": cause, "checks": checks})
 		}
 		if sp != nil {

@@ -127,12 +127,24 @@ func spanDetail(sp source.StateSpan) string {
 	}
 	for _, c := range sp.Checks {
 		t := fmt.Sprintf("Check of %s: %d failed, %d slow", c.URL, c.Failures, c.Slow)
+		if sl := c.Slowest; sl != nil {
+			phase, ms := sl.Mostly()
+			t += fmt.Sprintf(", slowest %s (%s %s)", millis(sl.Ms), millis(ms), phase)
+		}
 		if c.LastError != nil && *c.LastError != "" {
 			t += ", last error: " + clip(*c.LastError, 160)
 		}
 		parts = append(parts, strings.TrimSuffix(t, ".")+".")
 	}
 	return strings.Join(parts, " ")
+}
+
+// millis is a duration given in milliseconds, in words.
+func millis(ms int) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%d ms", ms)
+	}
+	return fmt.Sprintf("%.1f s", float64(ms)/1000)
 }
 
 func minutes(m int) string {

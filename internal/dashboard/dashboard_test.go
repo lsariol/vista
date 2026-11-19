@@ -226,7 +226,8 @@ func TestStateChangesOnTheTimelineAndIncidents(t *testing.T) {
 		{State: "operational", Start: now.Add(-3 * time.Hour), End: now.Add(-2 * time.Hour)},
 		{State: "down", Start: now.Add(-2 * time.Hour), End: now.Add(-90 * time.Minute),
 			Services: []source.SpanCause{{Service: "lys", State: "down", Minutes: 30}},
-			Checks:   []source.CheckCause{{URL: "https://lys.mobasity.com", Failures: 6, LastError: str("timeout")}}},
+			Checks: []source.CheckCause{{URL: "https://lys.mobasity.com", Failures: 6, Slow: 2, LastError: str("timeout"),
+				Slowest: &source.SlowestCheck{Ms: 2600, DNSMs: 20, ConnectMs: 2400, TLSMs: 90, WaitMs: 80, ReadMs: 10}}}},
 		{State: "operational", Start: now.Add(-90 * time.Minute), End: now},
 	}}}}
 	a := BuildActivity(ActivityInputs{Now: now, Range: "24h", States: spans,
@@ -234,7 +235,7 @@ func TestStateChangesOnTheTimelineAndIncidents(t *testing.T) {
 	if len(a.Events) != 1 || a.Events[0].Kind != "state" || a.Events[0].Title != "lys down" {
 		t.Fatalf("events = %+v", a.Events)
 	}
-	for _, want := range []string{"30 minutes", "Service lys down", "6 failed", "timeout"} {
+	for _, want := range []string{"30 minutes", "Service lys down", "6 failed", "slowest 2.6 s (2.4 s connecting)", "timeout"} {
 		if !strings.Contains(a.Events[0].Detail, want) {
 			t.Errorf("detail %q lacks %q", a.Events[0].Detail, want)
 		}
