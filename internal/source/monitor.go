@@ -144,12 +144,39 @@ type SpanCause struct {
 
 // CheckCause is an outside check that failed or was slow during a span.
 type CheckCause struct {
-	Service   string  `json:"service"`
-	URL       string  `json:"url"`
-	State     string  `json:"state"`
-	Failures  int     `json:"failures"`
-	Slow      int     `json:"slow"`
-	LastError *string `json:"last_error"`
+	Service   string        `json:"service"`
+	URL       string        `json:"url"`
+	State     string        `json:"state"`
+	Failures  int           `json:"failures"`
+	Slow      int           `json:"slow"`
+	LastError *string       `json:"last_error"`
+	Slowest   *SlowestCheck `json:"slowest"` // nil when none was timed
+}
+
+// SlowestCheck is a span's slowest answer and where its time went: looking
+// up the address and connecting are the network, waiting is the site.
+type SlowestCheck struct {
+	At        time.Time `json:"at"`
+	Ms        int       `json:"ms"`
+	DNSMs     int       `json:"dns_ms"`
+	ConnectMs int       `json:"connect_ms"`
+	TLSMs     int       `json:"tls_ms"`
+	WaitMs    int       `json:"wait_ms"`
+	ReadMs    int       `json:"read_ms"`
+}
+
+// Mostly is the phase that took longest, in words, and its milliseconds.
+func (s SlowestCheck) Mostly() (string, int) {
+	phase, ms := "looking up the address", s.DNSMs
+	for _, p := range []struct {
+		name string
+		ms   int
+	}{{"connecting", s.ConnectMs}, {"the TLS handshake", s.TLSMs}, {"waiting for the site", s.WaitMs}, {"reading the answer", s.ReadMs}} {
+		if p.ms > ms {
+			phase, ms = p.name, p.ms
+		}
+	}
+	return phase, ms
 }
 
 // SonarUsage is Sonar's GET /v1/monitor/usage: each service's use over a range.
