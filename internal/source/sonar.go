@@ -128,11 +128,14 @@ type HostPoint struct {
 	DiskTotalBytes *int64    `json:"disk_total_bytes"`
 }
 
-// Spread is a bucket's average, minimum and maximum.
+// Spread is a bucket's average, minimum and maximum, and its lowest and
+// highest one-minute average (nil before Sonar v0.3.1).
 type Spread struct {
-	Avg float64 `json:"avg"`
-	Min float64 `json:"min"`
-	Max float64 `json:"max"`
+	Avg       float64  `json:"avg"`
+	Min       float64  `json:"min"`
+	Max       float64  `json:"max"`
+	MinuteMin *float64 `json:"minute_min"`
+	MinuteMax *float64 `json:"minute_max"`
 }
 
 // Peak is a bucket's average and maximum.

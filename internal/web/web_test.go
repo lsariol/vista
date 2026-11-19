@@ -47,7 +47,7 @@ func fakeSources(t *testing.T) (*httptest.Server, *[]string) {
 		case "/v1/monitor/host":
 			io.WriteString(w, `{"range":"1h","bucket_seconds":60,"now":{"read_at":"2026-11-18T11:59:30Z","cpu_pct":10,"core_pcts":[9,11],"memory_total":1000,"memory_used":400,"memory_used_pct":40,
 				"load1":0.5,"load5":0.4,"load15":0.3,"uptime_seconds":3600,"disk":{"total":100,"used":89,"available":11,"used_pct":89},"network":[{"interface":"eth0","rx_bytes_per_s":2000,"tx_bytes_per_s":500}]},
-				"points":[{"t":"2026-11-18T11:59:00Z","cpu_pct":{"avg":10,"min":5,"max":20},"mem_used_pct":null,"coverage_pct":100,"disk_used_bytes":89}],
+				"points":[{"t":"2026-11-18T11:59:00Z","cpu_pct":{"avg":10,"min":5,"max":20,"minute_min":8,"minute_max":12},"mem_used_pct":null,"coverage_pct":100,"disk_used_bytes":89}],
 				"network":[{"interface":"eth0","points":[{"t":"2026-11-18T11:59:00Z","minutes":1,"rx_bytes":120000,"tx_bytes":30000}]}],"updates":[]}`)
 		case "/v1/monitor/projects":
 			io.WriteString(w, `{"fresh":true,"projects":[{"project":"lys","group":"app","state":"operational","state_since":"2026-11-18T10:00:00Z","evidence":"checked","services":[
@@ -207,6 +207,9 @@ func TestOverviewWithSources(t *testing.T) {
 	}
 	if o.Spark.State != "degraded" { // Sonar's conditions say warning
 		t.Errorf("spark = %s", o.Spark.State)
+	}
+	if !strings.Contains(rec.Body.String(), `"minute_min":8,"minute_max":12`) {
+		t.Errorf("the one-minute range doesn't reach the page: %s", rec.Body)
 	}
 	if o.Host.Now == nil || o.Host.Now.Load1 != 0.5 || len(o.Host.Network) != 1 {
 		t.Errorf("host now = %+v, network = %+v", o.Host.Now, o.Host.Network)

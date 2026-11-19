@@ -360,7 +360,7 @@
     }
     for (const se of series) {
       for (const seg of segments(se.points)) {
-        if (se.band) {
+        if (se.band && seg.every((p) => isNum(p.min) && isNum(p.max))) {
           const top = seg.map((p) => `${X(p.t).toFixed(1)},${Y(p.max).toFixed(1)}`);
           const bottom = seg.slice().reverse().map((p) => `${X(p.t).toFixed(1)},${Y(p.min).toFixed(1)}`);
           svg.append(s('polygon', { points: [...top, ...bottom].join(' '), fill: se.color, opacity: 0.12 }));
@@ -392,7 +392,7 @@
       for (const se of series) {
         const p = se.points[best];
         let v = p && isNum(p.v) ? tipFmt(p.v) : 'no data';
-        if (p && isNum(p.v) && se.band) v += ` (${tipFmt(p.min)}–${tipFmt(p.max)})`;
+        if (p && isNum(p.v) && se.band && isNum(p.min) && isNum(p.max)) v +=` (${tipFmt(p.min)}–${tipFmt(p.max)})`;
         rows.push(h('div', null, h('span', { style: { color: se.color } }, '● '), `${se.name}: ${v}`));
       }
       const near = markers.filter((m) => Math.abs(X(m.t) - px) < 6);
@@ -436,7 +436,10 @@
       return h('div', { class: 'empty' }, 'No host history: Sonar can\'t be read.');
     }
     const pts = host.points.map((p) => ({ t: Date.parse(p.t), p }));
-    const pick = (key) => pts.map(({ t, p }) => ({ t, v: p[key] ? p[key].avg : null, min: p[key] ? p[key].min : null, max: p[key] ? p[key].max : null }));
+    // The band is the bucket's lowest and highest one-minute average: its
+    // 5-second extremes would show a few seconds of a build as a near-full CPU.
+    const pick = (key) => pts.map(({ t, p }) => ({ t, v: p[key] ? p[key].avg : null,
+      min: p[key] ? p[key].minute_min : null, max: p[key] ? p[key].minute_max : null }));
     const disk = pts.map(({ t, p }) => ({ t, v: isNum(p.disk_used_bytes) && p.disk_total_bytes ? p.disk_used_bytes / p.disk_total_bytes * 100 : null }));
     const markers = host.deploys.map((d) => ({
       t: Date.parse(d.started),
@@ -1070,7 +1073,7 @@
       heading(page, sourcesPill(o.sources)),
       h('div', { class: 'grid grid-3' }, sparkHealthCard(o.spark), serverCard(o.host, o.containers), infraCard(o.infrastructure)),
       h('article', { class: 'card panel grid' },
-        panelHead('〽', 'Host resources', h('span', { class: 'muted' }, `${rangeLabel(o.host.range)} · average, with each bucket's range shaded`)),
+        panelHead('〽', 'Host resources', h('span', { class: 'muted' }, `${rangeLabel(o.host.range)} · average, with the range of its one-minute averages shaded`)),
         hostChart(o.host, { height: 260, band: true })),
       h('div', { class: 'grid grid-3' }, diskCard(o.host, o.disk, o.logs), networkCard(o.host), databasesCard(o.databases)),
       h('div', { class: 'grid grid-1-1' }, diskByProjectCard(o.disk), logsCard(o.logs)),

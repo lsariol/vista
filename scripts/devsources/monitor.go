@@ -43,8 +43,9 @@ func host(w http.ResponseWriter, r *http.Request) {
 		mem := 41 + 3*math.Sin(x/23)
 		disk := 285e9 + 4e9*float64(i)/float64(n)
 		points = append(points, map[string]any{"t": t, "coverage_pct": 100,
-			"cpu_pct":        map[string]float64{"avg": cpu, "min": cpu * 0.55, "max": math.Min(100, cpu*1.6)},
-			"mem_used_pct":   map[string]float64{"avg": mem, "min": mem - 1.2, "max": mem + 1.5},
+			"cpu_pct": map[string]float64{"avg": cpu, "min": cpu * 0.55, "max": math.Min(100, cpu*3),
+				"minute_min": cpu * 0.85, "minute_max": math.Min(100, cpu*1.2)},
+			"mem_used_pct":   map[string]float64{"avg": mem, "min": mem - 1.2, "max": mem + 1.5, "minute_min": mem - 0.6, "minute_max": mem + 0.8},
 			"mem_used_bytes": int64(mem / 100 * 16 * gib), "mem_total_bytes": int64(16 * gib), "swap_used_bytes": int64(322122547),
 			"load1":           map[string]float64{"avg": 0.7 + 0.3*math.Sin(x/5), "max": 1.4 + 0.4*math.Sin(x/3)},
 			"disk_used_bytes": int64(disk), "disk_total_bytes": int64(468e9)})
