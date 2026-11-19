@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.0.0 (2026-11-18)
+## v0.0.0 (2026-11-19)
 
 The first version: a read-only dashboard over Sonar, Blackbox and Lighthouse, behind Cloudflare Access.
 
