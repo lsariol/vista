@@ -12,7 +12,7 @@ Vista is a private, read-only dashboard for Spark, the server Mobasity's project
 - See each project's deploy state, the version it runs and its releases.
 - See error counts per project, repeated errors grouped together, and the newest error lines.
 - Search the logs every container wrote, open a line's fields, and read the lines around it.
-- Review availability, every incident in the last 30 days with when it began and ended, and the days each project was down or degraded.
+- Review availability, every incident in the last 30 days with when it began and ended and, for slow outside checks, where the slowest answer's time went, and the days each project was down or degraded.
 - See where each piece of information comes from and how fresh it is. A source that can't be read is shown as unknown, never as zero or healthy.
 
 Vista collects and judges nothing itself: it shows what other services report. It reads [Sonar](https://github.com/lsariol/sonar) for states, uptime, the server, containers and the apps' reports, [Blackbox](https://github.com/lsariol/blackbox) for logs and error counts, and [Lighthouse](https://github.com/lsariol/lighthouse) for deploys and releases, through their read-only APIs, and only while a page is open. Without Lighthouse, it shows the container swaps Sonar saw instead. It has no controls: it can't deploy, restart, change settings or read secrets.

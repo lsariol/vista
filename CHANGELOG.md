@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.1 (2026-11-19)
+
+### Added
+
+- When a project was degraded by slow outside checks, Activity and Incidents say how long the slowest answer took and which part took longest: looking up the address, connecting, the TLS handshake, waiting for the site or reading the answer.
+
+### Fixed
+
+- The shaded band on the Spark page's host chart runs from the lowest to the highest one-minute average in each bucket, so a few seconds of a build no longer show as a nearly full CPU. Without those averages from Sonar, no band is drawn.
+
 ## v0.1.0 (2026-11-19)
 
 Vista shows everything Sonar and Blackbox now serve, and the Overview is laid out as a server dashboard.
